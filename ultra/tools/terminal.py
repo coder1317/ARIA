@@ -12,9 +12,13 @@ from dataclasses import dataclass, field
 from ultra.config import Config
 
 BLOCKED_PATTERNS = [
-    "rm -rf /", "rm -rf ~", "rm -rf .", "mkfs", "format c:",
+    "rm -rf /", "rm -rf ~", "rm -rf .", "rm -rf /usr", "rm -rf /etc",
+    "rm -rf /var", "rm -rf /home", "mkfs", "mkfs.", "format c:",
     ":(){:|:&};:", "dd if=/dev/zero", "shutdown", "reboot",
-    "chmod -R 777 /", "> /dev/sda", "git push -f origin master",
+    "chmod -R 777 /", "chmod -R 777 /usr", "chown -R /",
+    "> /dev/sda", "> /dev/sdb", "git push -f origin master",
+    "curl -sSL | sudo bash", "curl -sL | sudo bash",
+    "wget -qO- | sudo bash", "pvcreate", "fdisk /dev/sda",
 ]
 
 DANGEROUS_PATTERNS = [  # require confirmation
@@ -62,7 +66,8 @@ class Terminal:
         self.config = config
         self.confirm = confirm or (lambda msg: True)
 
-    def run(self, command: str, auto_approve: bool = False) -> CommandResult:
+    def run(self, command: str, auto_approve: bool = False,
+            cwd: str | None = None) -> CommandResult:
         reason = check_safety(command, self.config)
         if reason:
             if "requires confirmation" in reason and auto_approve:
@@ -83,6 +88,7 @@ class Terminal:
                 text=True,
                 timeout=self.config.command_timeout,
                 executable="/bin/bash" if sys.platform != "win32" else None,
+                cwd=cwd,
             )
         except subprocess.TimeoutExpired as e:
             return CommandResult(

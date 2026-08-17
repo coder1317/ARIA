@@ -1,18 +1,49 @@
 """Evaluator — output quality validation + iteration caps (spec §6.4).
 
-Checks are deterministic and offline (file presence, Python parse,
-secret scan via Security). The engineering pipeline and orchestrator use
-these scores to decide retry vs give-up, and a CircuitBreaker stops
-repeated failure loops instead of grinding forever.
+Checks: file presence/completeness, full Python compile, a runtime
+smoke test of the entry point, and a secret scan via Security. The
+engineering pipeline and orchestrator use these scores to decide retry
+vs give-up, and a CircuitBreaker stops repeated failure loops instead of
+grinding forever.
 """
 from __future__ import annotations
 
 import ast
+import subprocess
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from ultra.security import Security
+
+SMOKE_TIMEOUT = 15  # seconds
+
+
+def _compile_ok(source: str) -> bool:
+    """Full Python compile — stricter than ast.parse (catches e.g.
+    duplicate arguments, invalid awaits at compile time)."""
+    try:
+        compile(source, "<generated>", "exec")
+        return True
+    except (SyntaxError, ValueError):
+        return False
+
+
+def _entry_point(project_dir: Path) -> Path | None:
+    """Find the most likely CLI entry point."""
+    for name in ("main.py", "app.py", "cli.py", "__main__.py"):
+        p = project_dir / name
+        if p.is_file():
+            return p
+    for p in sorted(project_dir.rglob("*.py")):
+        try:
+            if 'if __name__ == "__main__"' in p.read_text(
+                    encoding="utf-8", errors="ignore"):
+                return p
+        except OSError:
+            continue
+    return None
 
 
 @dataclass
@@ -34,7 +65,11 @@ class Evaluator:
         self.threshold = threshold
 
     def evaluate_project(self, project_dir: Path) -> EvalResult:
-        """Score a generated project on completeness/correctness/safety."""
+        """Score a generated project on completeness/correctness/runtime/safety.
+
+        "Files parse" is not enough — the entry point is actually executed
+        (--help) so a project that crashes on startup is scored down.
+        """
         py_files = [f for f in project_dir.rglob("*.py") if f.is_file()]
         checks: dict[str, dict] = {}
 
@@ -46,19 +81,20 @@ class Evaluator:
                                   "score": completeness,
                                   "detail": f"{len(substantial)}/{len(py_files)} substantial files"}
 
-        # correctness — files parse
-        parsed = 0
+        # correctness — full compile of every file
+        compiled = 0
         for f in py_files:
             try:
-                ast.parse(f.read_text(encoding="utf-8", errors="ignore"))
-                parsed += 1
-            except SyntaxError:
-                pass
-        correctness = parsed / len(py_files) if py_files else 0.0
+                src = f.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            if _compile_ok(src):
+                compiled += 1
+        correctness = compiled / len(py_files) if py_files else 0.0
         checks["correctness"] = {"ok": correctness >= 0.8, "score": correctness,
-                                 "detail": f"{parsed}/{len(py_files)} files parse"}
+                                 "detail": f"{compiled}/{len(py_files)} files compile"}
 
-        # safety — secret scan
+        # safety — secret scan (before smoke: never execute risky code)
         bundle = "\n".join(
             f.read_text(encoding="utf-8", errors="ignore") for f in py_files)
         scan = self.security.scan_code(bundle, "python")
@@ -66,7 +102,25 @@ class Evaluator:
         checks["safety"] = {"ok": not scan.has_critical(), "score": safety,
                             "detail": scan.summary()}
 
-        score = (completeness + correctness + safety) / 3.0
+        # runtime smoke — actually run the entry point
+        if scan.has_critical():
+            smoke = 0.0
+            checks["smoke"] = {"ok": False, "score": smoke,
+                                "detail": "skipped — project has critical security findings"}
+        else:
+            entry = _entry_point(project_dir)
+            if entry is None:
+                smoke = 0.0
+                checks["smoke"] = {"ok": False, "score": smoke,
+                                    "detail": "no entry point detected"}
+            else:
+                smoke, detail = _run_smoke(entry, project_dir)
+                checks["smoke"] = {"ok": smoke >= 0.8, "score": smoke,
+                                    "detail": detail}
+
+        # weights: runtime is the strongest signal that "built" is real
+        score = (0.15 * completeness + 0.25 * correctness
+                 + 0.35 * smoke + 0.25 * safety)
         return EvalResult(score=score, passed=score >= self.threshold, checks=checks)
 
 
@@ -106,3 +160,27 @@ class CircuitBreaker:
         if self.open_until:
             return max(1, int(self.open_until - time.time()))
         return self.max_failures - self.failures
+
+
+def _run_smoke(entry: Path, project_dir: Path) -> tuple[float, str]:
+    """Run `<entry> --help` in the project dir; score 1.0 on clean exit.
+
+    Timeout is reported honestly (could be a server that stays up) and a
+    non-zero exit reports the first stderr lines. Never passes silently.
+    """
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(entry), "--help"],
+            capture_output=True, text=True, timeout=SMOKE_TIMEOUT,
+            cwd=str(project_dir),
+        )
+    except subprocess.TimeoutExpired:
+        return 0.0, (f"entry {entry.name} did not exit within "
+                     f"{SMOKE_TIMEOUT}s (may be a server — verify manually)")
+    except OSError as e:
+        return 0.0, f"could not run {entry.name}: {e}"
+    if proc.returncode == 0:
+        return 1.0, f"{entry.name} --help ran cleanly"
+    err = (proc.stderr or proc.stdout or "").strip().splitlines()
+    return 0.0, f"{entry.name} --help exited {proc.returncode}: " + \
+        " ".join(err[:2])[:160]

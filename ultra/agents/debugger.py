@@ -11,7 +11,7 @@ from pathlib import Path
 from ultra.agents.coder import _parse_files
 from ultra.llm import OllamaClient
 from ultra.persona import system_prompt
-from ultra.security import Security
+from ultra.security import Security, resolve_inside
 from ultra.tools.editor import Editor
 
 SYSTEM = system_prompt("debugger") + """
@@ -54,7 +54,11 @@ def fix_issues(client: OllamaClient, project_dir: Path,
                 if not fixed:
                     remaining.append(fname)
                 continue
-            path = project_dir / fname
+            path = resolve_inside(project_dir, fname)
+            if path is None:
+                # model-supplied filename escaping the workspace
+                remaining.append(fname)
+                continue
             if not path.exists():
                 remaining.append(fname)
                 continue
@@ -83,7 +87,10 @@ def fix_issues(client: OllamaClient, project_dir: Path,
                     continue
                 if not _better_than(new_content, content):
                     continue  # don't make it worse
-                result = Editor.write_file(str(project_dir / name),
+                target = resolve_inside(project_dir, name)
+                if target is None:
+                    continue  # path escaping the workspace — skip
+                result = Editor.write_file(str(target),
                                            new_content, validate=False)
                 if result.ok:
                     fixed_this_file = True
@@ -129,7 +136,9 @@ def _repair_project(client: OllamaClient, project_dir: Path,
     written = False
     for name, new_content in new_files.items():
         if name in ("app.py",) or any(p.name == name for p in py_files) or "." in name:
-            target = project_dir / name
+            target = resolve_inside(project_dir, name)
+            if target is None:
+                continue  # path escaping the workspace — skip
             previous = target.read_text(encoding="utf-8") if target.exists() else ""
             if not _better_than(new_content, previous):
                 continue

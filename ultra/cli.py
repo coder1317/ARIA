@@ -384,8 +384,14 @@ class AriaCLI:
             warn("FastAPI not installed — run: pip install fastapi uvicorn")
             return
         from ultra.api import make_app
-        ok(f"starting API on http://localhost:{port}")
-        uvicorn.run(make_app(self.orch, self.config), host="0.0.0.0", port=port)
+        import os
+        host = os.getenv("ARIA4_API_HOST", "127.0.0.1").strip()
+        token = os.getenv("ARIA4_API_TOKEN", "").strip()
+        if token:
+            ok(f"starting API on http://{host}:{port} (bearer auth enabled)")
+        else:
+            ok(f"starting API on http://{host}:{port} (no auth — set ARIA4_API_TOKEN for protection)")
+        uvicorn.run(make_app(self.orch, self.config), host=host, port=port)
 
     def _models(self) -> None:
         models = self.client.available_models()

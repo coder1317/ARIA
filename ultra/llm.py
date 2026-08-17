@@ -21,7 +21,10 @@ class OllamaError(RuntimeError):
 class OllamaClient:
     def __init__(self, config: Config | None = None):
         self.config = config or Config.load()
-        self.timeout = 300  # long generation timeout
+        # long generation timeout — deep research/build generations on a
+        # 3B local model can exceed minutes; configurable via
+        # ARIA4_LLM_TIMEOUT (default 900s)
+        self.timeout = self.config.llm_timeout
         self._available_cache: list[str] | None = None
 
     def _resolve(self, model: str | None) -> str:
@@ -56,6 +59,13 @@ class OllamaClient:
                 json=payload,
                 timeout=timeout or self.timeout,
             )
+        except requests.Timeout as e:
+            # NOTE: requests.Timeout subclasses ConnectionError — catch it first
+            raise OllamaError(
+                f"Ollama timed out after {timeout or self.timeout}s "
+                f"({path}). Long generations on small local models can "
+                "exceed this — raise ARIA4_LLM_TIMEOUT if it keeps happening."
+            ) from e
         except requests.ConnectionError as e:
             raise OllamaError(
                 f"Cannot reach Ollama at {self.config.ollama_url}. "
@@ -72,6 +82,11 @@ class OllamaClient:
                 self.config.ollama_url + path,
                 timeout=timeout or self.timeout,
             )
+        except requests.Timeout as e:
+            # NOTE: requests.Timeout subclasses ConnectionError — catch it first
+            raise OllamaError(
+                f"Ollama timed out after {timeout or self.timeout}s ({path})."
+            ) from e
         except requests.ConnectionError as e:
             raise OllamaError(
                 f"Cannot reach Ollama at {self.config.ollama_url}."
@@ -88,19 +103,28 @@ class OllamaClient:
                 timeout=timeout or self.timeout,
                 stream=True,
             )
+        except requests.Timeout as e:
+            raise OllamaError(
+                f"Ollama timed out after {timeout or self.timeout}s ({path})."
+            ) from e
         except requests.ConnectionError as e:
             raise OllamaError(
                 f"Cannot reach Ollama at {self.config.ollama_url}."
             ) from e
         if resp.status_code != 200:
             raise OllamaError(f"Ollama error {resp.status_code}: {resp.text[:300]}")
-        for line in resp.iter_lines():
-            if not line:
-                continue
-            try:
-                yield json.loads(line)
-            except json.JSONDecodeError:
-                continue
+        try:
+            for line in resp.iter_lines():
+                if not line:
+                    continue
+                try:
+                    yield json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+        except requests.Timeout as e:
+            raise OllamaError(
+                f"Ollama stream timed out after {timeout or self.timeout}s ({path})."
+            ) from e
 
     # ── public API ─────────────────────────────────────────────────
 

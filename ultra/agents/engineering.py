@@ -35,7 +35,7 @@ class EngineeringPipeline:
         # quality gate: a weak model occasionally generates something that
         # parses but isn't a real project — restart the whole generation
         generated = False
-        for attempt in range(1, 4):
+        for attempt in range(1, self.config.max_build_attempts + 1):
             for f in project_dir.iterdir():
                 if f.is_file():
                     f.unlink()
