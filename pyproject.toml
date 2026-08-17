@@ -1,0 +1,28 @@
+[project]
+name = "aria-ultra"
+version = "1.0.0"
+description = "ARIA Ultra — autonomous multi-agent engineering assistant for Ubuntu (local-first Ollama, optional cloud providers)"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.31",
+    "rich>=13.0",
+    "beautifulsoup4>=4.12",
+]
+
+[project.optional-dependencies]
+docs = ["python-docx>=1.1", "openpyxl>=3.1", "pymupdf>=1.24"]
+api = ["fastapi>=0.104", "uvicorn>=0.24"]
+test = ["pytest>=7.0"]
+
+[project.scripts]
+aria-ultra = "ultra.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["ultra*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
