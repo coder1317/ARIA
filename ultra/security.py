@@ -12,6 +12,7 @@ from __future__ import annotations
 import ast
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 # Prompt-injection patterns (from the Ultra spec §4.6)
 INJECTION_PATTERNS = [
@@ -69,6 +70,28 @@ def _calculate_severity(findings: list[dict]) -> str:
         if sev in sevs:
             return sev
     return "low"
+
+
+def resolve_inside(root: Path | str, requested: str | Path) -> Path | None:
+    """Resolve a model-supplied path against a workspace root.
+
+    Returns the resolved absolute path if (and only if) it stays inside
+    ``root`` — blocking ``..`` traversal, absolute paths pointing outside,
+    and symlink escapes (``resolve()`` follows symlinks). Returns None
+    when the path escapes the workspace, so callers can skip it safely.
+
+    Every filesystem operation that accepts a model-generated filename
+    must go through this primitive.
+    """
+    root = Path(root).resolve()
+    req = Path(str(requested).strip())
+    candidate = req if req.is_absolute() else root / req
+    try:
+        resolved = candidate.resolve(strict=False)
+        resolved.relative_to(root)
+        return resolved
+    except (ValueError, OSError):
+        return None
 
 
 class Security:

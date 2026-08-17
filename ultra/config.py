@@ -76,6 +76,7 @@ class Config:
     # Safety defaults for the bash tool
     command_timeout: int = 60
     output_cap: int = 10_000
+    llm_timeout: int = 900  # seconds — deep research/build generations are slow on 3B models
     # Ultra additions
     providers: list[ProviderSpec] = field(default_factory=list)
     audit_db: Path = field(default_factory=lambda: Path.home() / ".aria4" / "memory" / "audit.db")
@@ -104,6 +105,7 @@ class Config:
             context_window=int(os.getenv("ARIA4_CONTEXT", "6")),
             command_timeout=int(os.getenv("ARIA4_CMD_TIMEOUT", "60")),
             output_cap=int(os.getenv("ARIA4_CMD_OUTPUT_CAP", "10000")),
+            llm_timeout=int(os.getenv("ARIA4_LLM_TIMEOUT", "900")),
             audit_db=Path(os.getenv(
                 "ARIA4_AUDIT_DB", str(home / ".aria4" / "memory" / "audit.db"))),
             max_concurrent_tasks=int(os.getenv("ARIA4_MAX_TASKS", "2")),
@@ -120,6 +122,8 @@ class Config:
 
     def _apply_yaml(self, config_path: Path | None) -> None:
         """Optional config.yaml overrides (env still wins after this)."""
+        if not _HAS_YAML:
+            return  # PyYAML not installed — skip YAML layer entirely
         candidates = [config_path, Path.cwd() / "config.yaml",
                       Path(__file__).resolve().parent.parent / "config.yaml"]
         raw: dict = {}
@@ -127,12 +131,12 @@ class Config:
             if c and c.is_file():
                 raw = yaml.safe_load(c.read_text(encoding="utf-8")) or {}
                 break
-        if not raw or not _HAS_YAML:
+        if not raw:
             return
         for key in ("ollama_url", "chat_model", "coding_model", "fallback_model",
                     "embed_model", "search_timeout", "research_max_sources",
                     "context_window", "command_timeout", "output_cap",
-                    "max_concurrent_tasks", "task_timeout_sec",
+                    "llm_timeout", "max_concurrent_tasks", "task_timeout_sec",
                     "max_build_attempts", "auto_extract_skills", "security_enabled"):
             if key in raw and os.getenv(_ENV_MAP.get(key, "")) is None:
                 setattr(self, key, raw[key])
@@ -197,6 +201,7 @@ _ENV_MAP = {
     "context_window": "ARIA4_CONTEXT",
     "command_timeout": "ARIA4_CMD_TIMEOUT",
     "output_cap": "ARIA4_CMD_OUTPUT_CAP",
+    "llm_timeout": "ARIA4_LLM_TIMEOUT",
     "max_concurrent_tasks": "ARIA4_MAX_TASKS",
     "task_timeout_sec": "ARIA4_TASK_TIMEOUT",
     "max_build_attempts": "ARIA4_MAX_BUILD_ATTEMPTS",

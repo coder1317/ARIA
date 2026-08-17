@@ -65,6 +65,10 @@ aria-ultra --api 8000
 curl -X POST localhost:8000/process -d '{"objective": "research ollama"}' -H 'Content-Type: application/json'
 ```
 
+The API binds to `127.0.0.1` by default. Set `ARIA4_API_TOKEN` in `.env`
+to require `Authorization: Bearer <token>` on every request; only bind
+`0.0.0.0` (via `ARIA4_API_HOST`) when a token is set.
+
 ## Architecture
 
 ```
@@ -86,14 +90,18 @@ ultra/
 
 **Provider pool routing** — tasks are routed by capability: code tasks → coding model, chat/research → chat model, anything failing falls over to the next provider in priority order. A provider that fails 3× consecutively is circuit-open for 60s. Configure a cloud provider by setting `ULTRA_CLOUD_BASE_URL`, `ULTRA_CLOUD_API_KEY`, `ULTRA_CLOUD_MODEL` in `.env`.
 
-**Security gates** — every input passes the injection check before any LLM call; every generated project is scanned for hardcoded secrets (`sk-`, `ghp_`, `AKIA`, ...) and dangerous patterns (`eval`, `os.system`, ...). Blocked inputs are recorded in the audit log.
+**Security gates** — every input passes the injection check before any LLM call; every generated project is scanned for hardcoded secrets (`sk-`, `ghp_`, `AKIA`, ...) and dangerous patterns (`eval`, `os.system`, ...). Blocked inputs are recorded in the audit log. Additional hardening:
+- **Path sandboxing** — every model-supplied filename is resolved against the project workspace (`resolve_inside`); `../../` traversal, absolute paths, and symlink escapes are silently dropped.
+- **Untrusted web content** — fetched pages are wrapped in `<untrusted_web_source>` blocks and the model is told they are data, never instructions (prompt-injection defense); leaked tags are stripped from reports.
+- **SSRF defense** — research only fetches http(s) URLs that resolve to public addresses; localhost, private ranges, and metadata endpoints (169.254.169.254) are refused, including mid-redirect.
+- **API auth** — bearer token (`ARIA4_API_TOKEN`), localhost bind by default, and redacted error messages (full detail goes to the audit log).
 
 **Self-improvement loop** — build → evaluate → on success (optionally) extract a skill → on failure write a lesson and open the build circuit. `ARIA4_EXTRACT_SKILLS=true` in `.env` turns on automatic skill extraction.
 
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest tests/ -q     # 100 tests, offline
+.venv/bin/python -m pytest tests/ -q     # 117 tests, offline
 ```
 
 ## Roadmap

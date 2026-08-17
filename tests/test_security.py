@@ -1,7 +1,7 @@
 """Tests for ultra.security — injection defense + code scanning."""
 import pytest
 
-from ultra.security import Security
+from ultra.security import Security, resolve_inside
 
 
 @pytest.fixture
@@ -72,3 +72,48 @@ def test_project_scan_annotates_files(sec):
     files = {"app.py": "x = eval(y)", "main.py": "print('hi')"}
     report = sec.scan_project(files)
     assert any(f.get("file") == "app.py" for f in report.findings)
+
+
+# ── path sandboxing (resolve_inside) ────────────────────────────────
+
+def test_resolve_inside_allows_normal_subpath(tmp_path):
+    f = resolve_inside(tmp_path, "src/app.py")
+    assert f is not None
+    assert f == (tmp_path / "src/app.py").resolve()
+
+
+def test_resolve_inside_normalizes_dot_segments(tmp_path):
+    f = resolve_inside(tmp_path, "src/../app.py")
+    assert f is not None
+    assert f == (tmp_path / "app.py").resolve()
+
+
+def test_resolve_inside_blocks_traversal(tmp_path):
+    assert resolve_inside(tmp_path, "../../etc/passwd") is None
+    assert resolve_inside(tmp_path, "../outside.py") is None
+
+
+def test_resolve_inside_blocks_absolute_outside(tmp_path):
+    assert resolve_inside(tmp_path, "/etc/passwd") is None
+    assert resolve_inside(tmp_path, "/tmp/evil.sh") is None
+
+
+def test_resolve_inside_allows_absolute_inside(tmp_path):
+    target = tmp_path / "app.py"
+    f = resolve_inside(tmp_path, str(target))
+    assert f is not None
+    assert f == target.resolve()
+
+
+def test_resolve_inside_blocks_symlink_escape(tmp_path):
+    outside = tmp_path.parent / "secret.txt"
+    outside.write_text("secret")
+    link = tmp_path / "link.txt"
+    link.symlink_to(outside)
+    # resolve() follows the symlink → lands outside → blocked
+    assert resolve_inside(tmp_path, "link.txt") is None
+
+
+def test_resolve_inside_blocks_deep_traversal(tmp_path):
+    assert resolve_inside(tmp_path, "a/../../../../etc/passwd") is None
+    assert resolve_inside(tmp_path, "sub/../../x") is None

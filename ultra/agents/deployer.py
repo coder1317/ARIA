@@ -15,6 +15,7 @@ from ultra.config import Config
 from ultra.display import info, ok, step, warn
 from ultra.llm import OllamaClient
 from ultra.persona import system_prompt
+from ultra.security import resolve_inside
 from ultra.tools.editor import Editor
 
 SYSTEM = system_prompt("devops") + """
@@ -62,15 +63,13 @@ Begin now."""
             break
 
     written: list[Path] = []
-    root = project_dir.resolve()
     for name, content in files.items():
-        # sanitize paths: strip traversal, keep files inside the project
-        clean = name.strip().lstrip("/\\").replace("..", "")
-        path = (project_dir / clean).resolve()
-        if not str(path).startswith(str(root)):
+        # path sandbox: model-supplied filenames must stay in the project
+        path = resolve_inside(project_dir, name)
+        if path is None:
             warn(f"deployer: skipping path outside project: {name}")
             continue
-        if ".github" in clean:
+        if ".github" in name:
             path.parent.mkdir(parents=True, exist_ok=True)
         result = Editor.write_file(str(path), content, validate=False)
         if result.ok:

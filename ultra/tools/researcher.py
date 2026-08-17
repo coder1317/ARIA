@@ -6,7 +6,9 @@ as a backup. All LLM work still happens locally via Ollama.
 """
 from __future__ import annotations
 
+import ipaddress
 import re
+import socket
 import urllib.parse
 from dataclasses import dataclass, field
 
@@ -17,6 +19,37 @@ from ultra.config import Config
 
 UA = ("Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:126.0) "
       "Gecko/20100101 Firefox/126.0")
+
+MAX_REDIRECTS = 5
+MAX_RAW_BYTES = 1_000_000  # cap page download size
+
+
+def _safe_url(url: str) -> bool:
+    """SSRF defense — only http(s), and only destinations that resolve to
+    public addresses. Blocks file://, ftp://, data://, localhost,
+    loopback, link-local (169.254.x), private ranges (10/8, 172.16/12,
+    192.168/16) and metadata endpoints (169.254.169.254).
+    """
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False
+    host = parsed.hostname
+    if not host:
+        return False
+    low = host.lower()
+    if low in ("localhost", "::1") or low.endswith(".local") or low.endswith(".localhost"):
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        try:
+            ip = ipaddress.ip_address(socket.gethostbyname(host))
+        except OSError:
+            return False
+    return bool(getattr(ip, "is_global", False))
 
 
 @dataclass
@@ -86,12 +119,13 @@ class Researcher:
     # ── search ──────────────────────────────────────────────────────
 
     def search(self, query: str, limit: int | None = None) -> list[Source]:
-        """Try Bing first, then DuckDuckGo as backup."""
+        """Try Bing first, then DuckDuckGo as backup. Unsafe URLs are
+        filtered out (SSRF defense)."""
         limit = limit or self.config.research_max_sources
         results = self._search_bing(query, limit)
         if not results:
             results = self._search_ddg(query, limit)
-        return results
+        return [r for r in results if _safe_url(r.url)]
 
     def _search_bing(self, query: str, limit: int) -> list[Source]:
         """Bing HTML — li.b_algo result blocks. No API key needed."""
@@ -155,13 +189,42 @@ class Researcher:
         return results
 
     def fetch(self, url: str, max_chars: int = 5000) -> str:
-        """Fetch and extract readable text from a page."""
-        try:
-            resp = self.session.get(url, timeout=self.config.search_timeout)
-            resp.raise_for_status()
-            return _clean_text(resp.text)[:max_chars]
-        except requests.RequestException:
-            return ""
+        """Fetch and extract readable text from a page.
+
+        Every redirect hop is re-validated against _safe_url (a page could
+        redirect to localhost/private addresses), and download size is
+        capped to avoid memory abuse.
+        """
+        current = url
+        for _ in range(MAX_REDIRECTS + 1):
+            if not _safe_url(current):
+                return ""
+            try:
+                resp = self.session.get(
+                    current, timeout=self.config.search_timeout,
+                    allow_redirects=False, stream=True,
+                )
+                if resp.status_code in (301, 302, 303, 307, 308):
+                    location = resp.headers.get("Location")
+                    if not location:
+                        return ""
+                    current = urllib.parse.urljoin(current, location)
+                    resp.close()
+                    continue
+                resp.raise_for_status()
+                chunks = []
+                total = 0
+                for chunk in resp.iter_content(chunk_size=64 * 1024):
+                    chunks.append(chunk)
+                    total += len(chunk)
+                    if total >= MAX_RAW_BYTES:
+                        break
+                resp.close()
+                html = b"".join(chunks).decode("utf-8", errors="ignore")
+                return _clean_text(html)[:max_chars]
+            except requests.RequestException:
+                return ""
+        return ""
 
     def deep_search(self, query: str, n_queries: int = 3) -> list[Source]:
         """Search the same topic from multiple angles."""

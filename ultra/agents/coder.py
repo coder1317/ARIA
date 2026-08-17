@@ -9,8 +9,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from ultra.display import warn
 from ultra.llm import OllamaClient
 from ultra.persona import system_prompt
+from ultra.security import resolve_inside
 from ultra.tools.editor import Editor
 
 SYSTEM = system_prompt("coder") + """
@@ -98,7 +100,12 @@ Begin now."""
             kept.append(name)  # plausible real file — keep it
         else:
             continue
-        path = project_dir / name
+        # path sandbox: a model-supplied filename like ../../etc/passwd
+        # must never escape the project workspace
+        path = resolve_inside(project_dir, name)
+        if path is None:
+            warn(f"coder: skipping path outside project: {name}")
+            continue
         result = Editor.write_file(str(path), content, validate=False)
         if result.ok:
             written.append(path)

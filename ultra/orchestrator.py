@@ -118,7 +118,7 @@ class Orchestrator:
 
     # ── dispatch ────────────────────────────────────────────────────
 
-    def dispatch(self, text: str) -> str:
+    def dispatch(self, text: str, context: dict | None = None) -> str:
         start = time.time()
         # gate 1: security — reject prompt injection before any LLM call
         report = self.security.validate_input(text)
@@ -132,8 +132,11 @@ class Orchestrator:
         intent = detect(self.client, text)
         problem = extract_problem(text)
         if self.audit:
+            detail = {"input": text[:300]}
+            if context:
+                detail["context"] = context
             self.audit.log(actor="brain", action="dispatch", task_type=intent,
-                           detail={"input": text[:300]})
+                           detail=detail)
         try:
             if intent == "research_only":
                 outcome = self._research(problem)

@@ -32,6 +32,53 @@ def test_empty_project_fails(tmp_path):
     assert not result.passed
 
 
+def test_smoke_runs_working_entry_point(tmp_path):
+    (tmp_path / "main.py").write_text(
+        "import sys\n"
+        "def main():\n"
+        "    print('hello')\n"
+        "if __name__ == '__main__':\n"
+        "    main()\n"
+    )
+    result = Evaluator().evaluate_project(tmp_path)
+    assert result.checks["smoke"]["ok"]
+    assert "ran cleanly" in result.checks["smoke"]["detail"]
+
+
+def test_smoke_fails_when_entry_point_crashes(tmp_path):
+    (tmp_path / "main.py").write_text(
+        "import sys\n"
+        "def main():\n"
+        "    raise RuntimeError('boom')\n"
+        "if __name__ == '__main__':\n"
+        "    main()\n"
+    )
+    result = Evaluator().evaluate_project(tmp_path)
+    assert not result.checks["smoke"]["ok"]
+    assert "exited" in result.checks["smoke"]["detail"]
+
+
+def test_smoke_skipped_when_security_critical(tmp_path):
+    (tmp_path / "main.py").write_text(
+        "import sys\n"
+        "x = eval('1+1')\n"
+        "def main():\n"
+        "    print('hi')\n"
+        "if __name__ == '__main__':\n"
+        "    main()\n"
+    )
+    result = Evaluator().evaluate_project(tmp_path)
+    assert not result.checks["safety"]["ok"]
+    assert "skipped" in result.checks["smoke"]["detail"]
+
+
+def test_no_entry_point_detected(tmp_path):
+    (tmp_path / "lib.py").write_text("def helper():\n    return 1\n")
+    result = Evaluator().evaluate_project(tmp_path)
+    assert not result.checks["smoke"]["ok"]
+    assert "no entry point" in result.checks["smoke"]["detail"]
+
+
 def test_circuit_breaker_opens_and_recovers():
     cb = CircuitBreaker("build", max_failures=3, cooldown_sec=0.05)
     assert not cb.is_open
