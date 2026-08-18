@@ -1,10 +1,75 @@
 # ARIA Ultra — Autonomous Multi-Agent Engineering Assistant
 
-A new prototype built from the **ARIA Ultra build specification**, layered on top of everything proven in ARIA v4. Local-first (Ollama, zero API keys), with optional OpenAI-compatible cloud providers that activate automatically when configured.
-
 ```
 ProviderPool · Research · Build · Market · Deploy · Orchestrate · Memory · Audit
 ```
+
+## What is ARIA?
+
+**ARIA** (Autonomous Research & Intelligent Agent) is a local-first, multi-agent AI system that can **research, plan, code, debug, test, deploy, and self-improve** software projects — all from your terminal, with zero API keys and zero cloud dependency.
+
+Think of it as an **AI engineering team on your laptop**. Instead of a single chatbot, ARIA is a collection of specialized agents — a researcher, architect, coder, debugger, tester, deployer, and more — coordinated by a central "Brain" orchestrator that decides which agent handles what, in what order, and how to recover when things go wrong.
+
+### Core ideas
+
+| Principle | What it means in practice |
+|---|---|
+| **Local-first** | Runs entirely on your machine via Ollama. Your code, research, and data never leave your laptop unless you explicitly add a cloud provider. |
+| **Multi-agent** | Specialized agents (research, code, debug, test, deploy, market intelligence, skill extraction) collaborate under a central Brain orchestrator. |
+| **Self-correcting** | Generated code is reviewed, tested, and security-scanned before delivery. Failures feed lessons back into memory. The system gets smarter over time. |
+| **Provider-agnostic** | A ProviderPool routes tasks to the best available LLM (local or cloud), with health tracking, circuit breakers, and automatic failover. |
+| **Auditable** | Every dispatch, agent call, command, and error is logged in an append-only audit trail. Nothing happens invisibly. |
+
+### How a request flows
+
+```
+User: "build a todo CLI app in Python"
+        │
+        ▼
+    Security Gate  ──── injection check, input validation
+        │
+        ▼
+       Brain  ──────── intent classified → build pipeline
+        │
+        ▼
+    Research  ──────── best practices, tech choices (with citations)
+        │
+        ▼
+    Architect ──────── file structure, module dependencies, API design
+        │
+        ▼
+     Coder    ──────── full implementation (routed to coding-capable model)
+        │
+        ▼
+    Reviewer  ──────── code review + security scan
+        │
+        ▼
+    Debugger  ──────── fix issues (re-scans to verify fixes are real)
+        │
+        ▼
+     Tester   ──────── unit tests, syntax check, runtime smoke test
+        │
+        ▼
+   Evaluator  ──────── scored build (completeness / correctness / safety)
+        │
+        ▼
+      Git     ──────── init, add, commit
+        │
+        ▼
+    Result    ──────── working project in ~/aria4_projects/<name>
+```
+
+### What ARIA can do today
+
+- **Research** — deep research with Bing, real citations, and a written report (saved to disk)
+- **Build** — architect → code → review → debug → test → git commit, all autonomous
+- **Market intelligence** — SWOT, competitive analysis, trend reports with sources
+- **Deploy** — generates Dockerfile, docker-compose, and GitHub Actions for a built project
+- **Learn** — extracts reusable skills from successful projects; writes lessons from failures
+- **Background tasks** — submit long-running work, check status, survive process restarts
+- **API server** — FastAPI mode with auth, for integration into other tools
+
+---
 
 ## What's new vs ARIA v4
 
