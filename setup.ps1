@@ -1,10 +1,10 @@
-# ARIA Ultra — Windows setup script (PowerShell)
+# ARIA — Windows setup script (PowerShell)
 # Installs Python deps + Ollama models. Safe to re-run.
 $ErrorActionPreference = "Stop"
 
 Set-Location $PSScriptRoot
 
-Write-Host "── ARIA Ultra setup (Windows) ──────────────────────" -ForegroundColor Cyan
+Write-Host "── ARIA setup (Windows) ──────────────────────" -ForegroundColor Cyan
 
 # 1. Python virtualenv
 if (-not (Test-Path ".venv")) {
@@ -67,6 +67,6 @@ if (-not (Test-Path ".env")) {
 }
 
 Write-Host ""
-Write-Host "✓ ARIA Ultra ready. Start it with:" -ForegroundColor Green
-Write-Host "    .\.venv\Scripts\Activate.ps1; aria-ultra" -ForegroundColor White
+Write-Host "✓ ARIA ready. Start it with:" -ForegroundColor Green
+Write-Host "    .\.venv\Scripts\Activate.ps1; aria" -ForegroundColor White
 Write-Host "  (start Ollama first if it isn't running: ollama serve)" -ForegroundColor Gray

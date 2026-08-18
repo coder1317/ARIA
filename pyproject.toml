@@ -1,7 +1,7 @@
 [project]
-name = "aria-ultra"
+name = "aria"
 version = "1.0.0"
-description = "ARIA Ultra — autonomous multi-agent engineering assistant for Ubuntu (local-first Ollama, optional cloud providers)"
+description = "ARIA — autonomous multi-agent engineering assistant (local-first Ollama, optional cloud providers)"
 requires-python = ">=3.10"
 dependencies = [
     "requests>=2.31",
@@ -15,7 +15,7 @@ api = ["fastapi>=0.104", "uvicorn>=0.24"]
 test = ["pytest>=7.0"]
 
 [project.scripts]
-aria-ultra = "ultra.cli:main"
+aria = "ultra.cli:main"
 
 [build-system]
 requires = ["setuptools>=68"]
