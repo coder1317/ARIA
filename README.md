@@ -14,11 +14,12 @@ Think of it as an **AI engineering team on your laptop**. Instead of a single ch
 
 | Principle | What it means in practice |
 |---|---|
-| **Local-first** | Runs entirely on your machine via Ollama. Your code, research, and data never leave your laptop unless you explicitly add a cloud provider. |
+| **Local-first** | Runs entirely on your machine via Ollama. Your code, research, and data never leave your laptop unless you explicitly add a cloud provider. Works on **Linux, macOS, and Windows**. |
 | **Multi-agent** | Specialized agents (research, code, debug, test, deploy, market intelligence, skill extraction) collaborate under a central Brain orchestrator. |
 | **Self-correcting** | Generated code is reviewed, tested, and security-scanned before delivery. Failures feed lessons back into memory. The system gets smarter over time. |
 | **Provider-agnostic** | A ProviderPool routes tasks to the best available LLM (local or cloud), with health tracking, circuit breakers, and automatic failover. |
 | **Auditable** | Every dispatch, agent call, command, and error is logged in an append-only audit trail. Nothing happens invisibly. |
+| **Secure** | Path sandboxing, SSRF defense, untrusted-content isolation, API auth, and a hardened terminal blocklist (Unix + Windows patterns). |
 
 ### How a request flows
 
@@ -85,6 +86,7 @@ User: "build a todo CLI app in Python"
 | **TaskManager** | synchronous pipelines | persistent background task queue: priorities, retries, timeouts, survives restarts |
 | **API mode** | — | FastAPI server: `/process`, `/health`, `/memory/search`, `/tasks`, `/agents` |
 | **Config** | `.env` only | `.env` + optional `config.yaml` (env wins) |
+| **Platform** | Linux only | Linux, macOS, **Windows** (setup.ps1 + terminal hardening) |
 
 Plus a real bug fixed during the port: **the v4 chat client silently dropped the system prompt** (persona/facts never reached plain chat) — the pool now injects it properly.
 
@@ -177,11 +179,41 @@ ultra/
 
 **Self-improvement loop** — build → evaluate → on success (optionally) extract a skill → on failure write a lesson and open the build circuit. `ARIA4_EXTRACT_SKILLS=true` in `.env` turns on automatic skill extraction.
 
+## Platform support
+
+| Platform | Setup | Status |
+|---|---|---|
+| **Ubuntu / Debian** | `./setup.sh` | ✅ Primary target |
+| **macOS** | `./setup.sh` | ✅ Tested |
+| **Windows** | `setup.bat` or `setup.ps1` | ✅ PowerShell auto-installs Ollama |
+
+All core Python code is cross-platform (`pathlib`, `threading.local` SQLite, platform-aware terminal). The terminal blocklist covers both Unix (`rm -rf /`) and Windows (`format c:`, `rmdir /s`) destructive patterns.
+
 ## Tests
 
 ```bash
+# Linux / macOS
 .venv/bin/python -m pytest tests/ -q     # 117 tests, offline
+
+# Windows
+.\.venv\Scripts\python -m pytest tests\ -q
 ```
+
+## Environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `ARIA4_HOME` | `~/.aria4` | Data directory (memory, vectors, audit) |
+| `ARIA4_PROJECTS` | `~/aria4_projects` | Where built projects are saved |
+| `ARIA4_EXTRACT_SKILLS` | `false` | Auto-extract skills on successful build |
+| `ARIA4_LLM_TIMEOUT` | `900` | LLM read timeout in seconds (for slow 3B generation) |
+| `ARIA4_API_TOKEN` | — | Bearer token for API auth (required if binding 0.0.0.0) |
+| `ARIA4_API_HOST` | `127.0.0.1` | API bind address |
+| `ULTRA_CLOUD_BASE_URL` | — | OpenAI-compatible cloud endpoint (activates cloud provider) |
+| `ULTRA_CLOUD_API_KEY` | — | API key for cloud provider |
+| `ULTRA_CLOUD_MODEL` | — | Model name for cloud provider |
+
+See `.env.example` for all options.
 
 ## Roadmap
 
