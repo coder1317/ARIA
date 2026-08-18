@@ -1,4 +1,4 @@
-# ARIA Ultra — Autonomous Multi-Agent Engineering Assistant
+# ARIA — Autonomous Multi-Agent Engineering Assistant
 
 ```
 ProviderPool · Research · Build · Market · Deploy · Orchestrate · Memory · Audit
@@ -74,7 +74,7 @@ User: "build a todo CLI app in Python"
 
 ## What's new vs ARIA v4
 
-| Capability | ARIA v4 | ARIA Ultra |
+| Capability | ARIA v4 | ARIA |
 |---|---|---|
 | **ProviderPool** | static granite→hermes fallback | multi-provider routing: health stats, circuit breaker (3 fails → 60s open), automatic failover, optional cloud (Groq/OpenRouter/...) |
 | **Security** | terminal blocklist only | prompt-injection gate on every input + secret/dangerous-pattern scan on generated code |
@@ -96,9 +96,9 @@ Plus a real bug fixed during the port: **the v4 chat client silently dropped the
 
 ```bash
 cd ARIA_ULTRA
-./setup.sh                # venv + deps + installs package + pulls models
+./setup.sh                  # venv + deps + installs package + pulls models
 source .venv/bin/activate
-aria-ultra                # or: python -m ultra
+aria                       # or: python -m ultra
 ```
 
 ### Windows
@@ -109,7 +109,7 @@ aria-ultra                # or: python -m ultra
 cd ARIA_ULTRA
 .\setup.ps1
 .\.venv\Scripts\Activate.ps1
-aria-ultra
+aria
 ```
 
 Requires: Python 3.10+, Ollama with `granite4.1:3b`, `hermes3:3b`, `nomic-embed-text`.
@@ -136,13 +136,13 @@ ARIA > skill extract ~/aria4_projects/myapp   # learn a skill from a project
 One-shot (non-interactive):
 
 ```bash
-aria-ultra "build a python cli calculator"
+aria "build a python cli calculator"
 ```
 
 API server:
 
 ```bash
-aria-ultra --api 8000
+aria --api 8000
 curl -X POST localhost:8000/process -d '{"objective": "research ollama"}' -H 'Content-Type: application/json'
 ```
 

@@ -34,7 +34,7 @@ class ProcessRequest(BaseModel):
 
 
 def make_app(orch, config: Config) -> FastAPI:
-    app = FastAPI(title="ARIA Ultra", version="1.0.0")
+    app = FastAPI(title="ARIA", version="1.0.0")
 
     token = os.getenv("ARIA4_API_TOKEN", "").strip()
     require_auth = bool(token)

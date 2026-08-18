@@ -1,6 +1,6 @@
 """BaseAgent — audit + performance wrapper around agent functions (spec §5.1).
 
-ARIA Ultra keeps the proven v4 agent functions (module-level, client-based)
+ARIA keeps the proven v4 agent functions (module-level, client-based)
 and wraps them so every run gets: timing, audit-log entry, provider name,
 and a uniform AgentResult. The Agent class gives the spec's registry shape
 (Brain.agents["research"].execute(...)) without rewriting working code.

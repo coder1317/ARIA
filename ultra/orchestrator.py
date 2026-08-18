@@ -280,7 +280,7 @@ class Orchestrator:
     def orchestrate(self, problem: str) -> str:
         """Decompose into background tasks and submit them."""
         if self.tasks is None:
-            return "Task manager not available — run `aria-ultra` with it enabled."
+            return "Task manager not available — run `aria` with it enabled."
         step(1, "Decomposing objective")
         plan = _decompose(self.client, problem)
         if not plan:

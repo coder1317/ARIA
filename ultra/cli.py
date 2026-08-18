@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""ARIA Ultra — autonomous multi-agent engineering assistant.
+"""ARIA — autonomous multi-agent engineering assistant.
 
 Usage:
-    aria-ultra                 interactive REPL
-    aria-ultra "build a cli tool"   one-shot (takes input from argv)
-    aria-ultra --api [port]    run the FastAPI server instead
+    aria                       interactive REPL
+    aria "build a cli tool"   one-shot (takes input from argv)
+    aria --api [port]          run the FastAPI server instead
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from ultra.security import Security
 from ultra.task_manager import TaskManager
 from ultra.tools.terminal import Terminal
 
-BANNER_TITLE = "ARIA Ultra — Autonomous Multi-Agent Assistant"
+BANNER_TITLE = "ARIA — Autonomous Multi-Agent Assistant"
 BANNER_SUBTITLE = "ProviderPool · Research · Build · Market · Deploy · Orchestrate · Memory · Audit"
 
 HELP = """[bold cyan]Commands[/bold cyan]

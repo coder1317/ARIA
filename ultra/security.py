@@ -1,4 +1,4 @@
-"""Security — defense-in-depth validation for ARIA Ultra.
+"""Security — defense-in-depth validation for ARIA.
 
 Two independent gates, per the spec:
   1. validate_input()  — runs BEFORE any LLM call (prompt-injection defense)

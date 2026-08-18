@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# ARIA Ultra — Ubuntu setup script
+# ARIA — Ubuntu setup script
 # Installs Python deps + Ollama models. Safe to re-run.
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
-echo "── ARIA Ultra setup ──────────────────────────────"
+echo "── ARIA setup ──────────────────────────────"
 
 # 1. Python virtualenv
 if [ ! -d .venv ]; then
@@ -46,6 +46,6 @@ if [ ! -f .env ]; then
 fi
 
 echo
-echo "✓ ARIA Ultra ready. Start it with:"
-echo "    source .venv/bin/activate && aria-ultra"
+echo "✓ ARIA ready. Start it with:"
+echo "    source .venv/bin/activate && aria"
 echo "  (start Ollama first if it isn't running: ollama serve)"

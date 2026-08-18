@@ -1,4 +1,4 @@
-"""Configuration for ARIA Ultra.
+"""Configuration for ARIA.
 
 Layered config: defaults → optional config.yaml → environment/.env.
 Environment variables always win. No API keys required — the default
