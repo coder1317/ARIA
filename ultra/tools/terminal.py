@@ -12,18 +12,35 @@ from dataclasses import dataclass, field
 from ultra.config import Config
 
 BLOCKED_PATTERNS = [
+    # Unix destructive
     "rm -rf /", "rm -rf ~", "rm -rf .", "rm -rf /usr", "rm -rf /etc",
-    "rm -rf /var", "rm -rf /home", "mkfs", "mkfs.", "format c:",
+    "rm -rf /var", "rm -rf /home", "mkfs", "mkfs.",
     ":(){:|:&};:", "dd if=/dev/zero", "shutdown", "reboot",
     "chmod -R 777 /", "chmod -R 777 /usr", "chown -R /",
-    "> /dev/sda", "> /dev/sdb", "git push -f origin master",
+    "> /dev/sda", "> /dev/sdb", "pvcreate", "fdisk /dev/sda",
     "curl -sSL | sudo bash", "curl -sL | sudo bash",
-    "wget -qO- | sudo bash", "pvcreate", "fdisk /dev/sda",
+    "wget -qO- | sudo bash",
+    # Windows destructive
+    "format c:", "format d:", "format e:",
+    "rmdir /s /q c:", "rmdir /s /q d:",
+    "rd /s /q c:\\", "rd /s /q d:\\",
+    "del /s /q c:\\*", "del /s /q d:\\*",
+    "shutdown /s", "shutdown /r", "shutdown /f",
+    "bcdedit", "diskpart", "cipher /w",
+    "takeown /f c:\\", "icacls c:\\ /grant",
+    "reg delete HKLM", "reg delete HKCU",
+    "net user Administrator", "net localgroup Administrators",
+    # Cross-platform dangerous
+    "git push -f origin master",
 ]
 
 DANGEROUS_PATTERNS = [  # require confirmation
     "git push", "sudo", "npm publish", "pip install -U", "pip uninstall",
     "rm -rf", "git reset --hard", "dropdb", "DROP TABLE", "kill -9",
+    # Windows equivalents
+    "rmdir /s", "rd /s", "del /s", "format ",
+    "Remove-Item -Recurse -Force", "del /f /q",
+    "taskkill /f", "Stop-Process -Force",
 ]
 
 

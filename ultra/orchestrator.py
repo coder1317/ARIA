@@ -336,9 +336,16 @@ class Orchestrator:
 
 
 def extract_path(text: str) -> str | None:
-    """Pull a filesystem path out of free text like 'fix the login bug in ~/app'."""
+    """Pull a filesystem path out of free text like 'fix the login bug in ~/app'.
+
+    Handles Unix (~/app, /home/user/app) and Windows (C:\\Users\\app, D:\\projects)."""
     import re
-    m = re.search(r"(?:in|at)\s+([~/][\w/\-\.]+)", text)
+    # Unix: ~/foo, /foo  |  Windows: C:\foo, D:\foo, or \\server\share
+    m = re.search(
+        r"(?:in|at|from)\s+"
+        r"((?:[a-zA-Z]:[\\/]|[\\/]|[~/])[\w\\/\-\.]+)",
+        text,
+    )
     return m.group(1) if m else None
 
 

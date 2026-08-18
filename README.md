@@ -88,7 +88,9 @@ User: "build a todo CLI app in Python"
 
 Plus a real bug fixed during the port: **the v4 chat client silently dropped the system prompt** (persona/facts never reached plain chat) — the pool now injects it properly.
 
-## Setup (Ubuntu)
+## Setup
+
+### Ubuntu / macOS
 
 ```bash
 cd ARIA_ULTRA
@@ -97,7 +99,19 @@ source .venv/bin/activate
 aria-ultra                # or: python -m ultra
 ```
 
+### Windows
+
+```powershell
+# Option 1: double-click setup.bat
+# Option 2: PowerShell
+cd ARIA_ULTRA
+.\setup.ps1
+.\.venv\Scripts\Activate.ps1
+aria-ultra
+```
+
 Requires: Python 3.10+, Ollama with `granite4.1:3b`, `hermes3:3b`, `nomic-embed-text`.
+The Windows script installs Ollama automatically if missing.
 
 ## Quick start
 
