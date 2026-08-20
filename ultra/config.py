@@ -85,6 +85,16 @@ class Config:
     max_build_attempts: int = 3
     auto_extract_skills: bool = False
     security_enabled: bool = True
+    # Telegram channel
+    telegram_token: str = ""
+    telegram_allowed_users: list[int] = field(default_factory=list)
+    # Scheduler
+    scheduler_enabled: bool = False
+    scheduler_interval: int = 30  # seconds between checks
+    # MCP
+    mcp_servers: list[str] = field(default_factory=list)  # "name:command args"
+    # Browser
+    browser_enabled: bool = False
 
     @classmethod
     def load(cls, env_path: Path | None = None,
@@ -113,6 +123,12 @@ class Config:
             max_build_attempts=int(os.getenv("ARIA4_MAX_BUILD_ATTEMPTS", "3")),
             auto_extract_skills=os.getenv("ARIA4_EXTRACT_SKILLS", "").lower() in ("1", "true", "yes"),
             security_enabled=os.getenv("ARIA4_SECURITY", "1").lower() not in ("0", "false", "no"),
+            telegram_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
+            telegram_allowed_users=[int(x) for x in os.getenv("TELEGRAM_ALLOWED_USERS", "").split(",") if x.strip().isdigit()],
+            scheduler_enabled=os.getenv("ARIA4_SCHEDULER", "").lower() in ("1", "true", "yes"),
+            scheduler_interval=int(os.getenv("ARIA4_SCHEDULER_INTERVAL", "30")),
+            mcp_servers=[s.strip() for s in os.getenv("ARIA_MCP_SERVERS", "").split(",") if s.strip()],
+            browser_enabled=os.getenv("ARIA4_BROWSER", "").lower() in ("1", "true", "yes"),
         )
         cfg._apply_yaml(config_path)
         cfg.providers = cls._build_providers(cfg)
