@@ -20,12 +20,26 @@ INTENTS = {
 
 # matched FIRST — things that must never be routed to research/build
 _CHAT_PATTERNS = [
+    # self-introduction / identity
     "introduce yourself", "tell me about yourself", "who are you",
-    "what are you", "what can you do", "how are you", "hello", "hi ",
-    "hey ", "thanks", "thank you", "good morning", "good evening",
-    "good afternoon", "nice to meet", "help me get started",
-    "what should i do first", "just chatting", "tell me a joke",
-    "how does this work", "what is this", "what is aria",
+    "what are you", "what can you do", "what do you do",
+    "what are your capabilities", "explain your capabilities",
+    "what are you capable", "tell me what you can",
+    "describe yourself", "describe your capabilities",
+    "what is your purpose", "what is your role",
+    "what is aria", "tell me about aria",
+    "what can you help", "how can you help",
+    "what services do you", "what features do you",
+    # greetings / small talk
+    "how are you", "hello", "hi ", "hey ",
+    "thanks", "thank you", "good morning", "good evening",
+    "good afternoon", "nice to meet", "just chatting",
+    "tell me a joke", "help me get started",
+    "what should i do first",
+    # meta / about the system
+    "how does this work", "what is this",
+    "what models do you use", "what model are you",
+    "what version", "how do i use you",
 ]
 
 _KEYWORD_ROUTES: list[tuple[str, list[str]]] = [
@@ -94,9 +108,30 @@ def llm_route(client: OllamaClient, text: str) -> str:
     return intent if intent in INTENTS else "chat"
 
 
+# strong small-talk patterns — never override with LLM
+_STRONG_CHAT = {
+    "introduce yourself", "tell me about yourself", "who are you",
+    "what are you", "what can you do", "what do you do",
+    "explain your capabilities", "what are your capabilities",
+    "what are you capable", "describe yourself",
+    "what is your purpose", "what is your role",
+    "what is aria", "tell me about aria",
+    "how can you help", "what can you help",
+    "hello", "hi", "hey",
+    "thanks", "thank you",
+    "good morning", "good evening", "good afternoon",
+    "how are you", "nice to meet",
+}
+
+
 def detect(client: OllamaClient, text: str) -> str:
     intent = keyword_route(text)
     if intent == "chat":
+        # check if it's a strong small-talk pattern — if so, don't
+        # let the unreliable 3B classifier override it
+        low = text.lower().strip()
+        if any(p in low for p in _STRONG_CHAT):
+            return "chat"
         # ambiguous — ask the model once
         intent = llm_route(client, text)
     return intent
