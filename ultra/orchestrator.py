@@ -42,6 +42,15 @@ from ultra.security import Security
 from ultra.task_manager import TaskManager
 from ultra.tools.terminal import Terminal
 
+# Optional: Agent Runtime + Tool Registry
+try:
+    from ultra.core.tool_registry import ToolRegistry, ToolCall
+    from ultra.core.runtime import AgentRuntime, Plan, PlanStatus
+    from ultra.core.register_tools import register_all_tools
+    _HAS_RUNTIME = True
+except ImportError:
+    _HAS_RUNTIME = False
+
 
 @dataclass
 class SessionReport:
@@ -111,6 +120,11 @@ class Orchestrator:
             self.tasks.register("build", self._build_task)
             self.tasks.register("market", self._market_task)
             self.tasks.register("chat", self._chat_task)
+
+        # Agent Runtime (optional — enabled via ARIA4_RUNTIME=1)
+        self.runtime = None
+        if _HAS_RUNTIME and config.runtime_enabled:
+            self._init_runtime()
 
     def project(self, path: Path, description: str) -> None:
         self.last_project = path
@@ -297,6 +311,84 @@ class Orchestrator:
             info(f"  {tid}  {ttype}: {list(payload.values())[0][:50]}")
         return ("Submitted " + ", ".join(ids) +
                 " — check with `tasks` or `status <id>`")
+
+    # ── Agent Runtime ─────────────────────────────────────────────
+
+    def _init_runtime(self) -> None:
+        """Initialize the Agent Runtime with Tool Registry."""
+        registry = ToolRegistry()
+        register_all_tools(
+            registry, self.config,
+            terminal=self.terminal,
+            memory=self.memory,
+            vectors=self.vectors,
+            client=self.client,
+            skills=self.skills,
+        )
+
+        def llm_fn(prompt: str, system: str = "") -> str:
+            return self.client.chat(
+                [{"role": "user", "content": prompt}],
+                system=system, task_type="runtime",
+            )
+
+        def json_fn(prompt: str, system: str = "") -> dict:
+            return self.client.json(prompt, system=system, task_type="runtime")
+
+        self.runtime = AgentRuntime(
+            registry=registry,
+            llm_fn=llm_fn,
+            json_fn=json_fn,
+            max_iterations=self.config.runtime_max_iterations,
+            max_replans=self.config.runtime_max_replans,
+        )
+        self._tool_registry = registry
+
+    def dispatch_runtime(self, text: str) -> str:
+        """Route through the Agent Runtime instead of hardcoded pipelines.
+
+        The runtime creates a plan, executes steps via the tool registry,
+        observes results, and replans if needed.
+        """
+        if self.runtime is None:
+            return "Agent Runtime not enabled. Set ARIA4_RUNTIME=1 in .env"
+
+        start = time.time()
+        if self.audit:
+            self.audit.log(actor="brain", action="runtime_dispatch",
+                           detail={"input": text[:300]})
+
+        try:
+            plan = self.runtime.create_plan(text)
+            plan = self.runtime.run(plan)
+        except Exception as e:
+            warn(f"runtime error: {e}")
+            return f"Runtime failed: {e}"
+
+        duration = time.time() - start
+        self.report.record(plan.status == PlanStatus.COMPLETED, duration)
+
+        # Format result
+        lines = [plan.summary(), ""]
+        for obs in plan.observations:
+            if obs.tool_results:
+                for r in obs.tool_results:
+                    lines.append(f"  {r.summary()}")
+        if plan.status == PlanStatus.COMPLETED:
+            ok(f"mission complete ({duration:.1f}s, {plan.replan_count} replans)")
+        else:
+            warn(f"mission {plan.status.value} ({duration:.1f}s)")
+
+        self.memory.log_interaction(text, "runtime",
+                                    plan.status == PlanStatus.COMPLETED,
+                                    duration * 1000)
+        return "\n".join(lines)
+
+    def mission_status(self) -> str:
+        """Show status of the last runtime execution."""
+        if self.runtime is None:
+            return "Agent Runtime not enabled."
+        return self.runtime.summary()
 
     # ── helpers ─────────────────────────────────────────────────────
 

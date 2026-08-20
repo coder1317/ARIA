@@ -26,7 +26,7 @@ from ultra.task_manager import TaskManager
 from ultra.tools.terminal import Terminal
 
 BANNER_TITLE = "ARIA — Autonomous Multi-Agent Assistant"
-BANNER_SUBTITLE = "ProviderPool · Research · Build · Market · Deploy · Orchestrate · Memory · Audit"
+BANNER_SUBTITLE = "ProviderPool · Research · Build · Market · Deploy · Orchestrate · Memory · Audit · Runtime"
 
 HELP = """[bold cyan]Commands[/bold cyan]
   [white]help[/white]                 this menu
@@ -57,6 +57,10 @@ HELP = """[bold cyan]Commands[/bold cyan]
   [white]mcp status[/white]           show MCP server connections
   [white]browse <url>[/white]         open page in headless browser
   [white]screenshot <url>[/white]     capture page screenshot
+  [white]runtime[/white]              toggle Agent Runtime (PLAN→ACT→OBSERVE→EVALUATE)
+  [white]mission <objective>[/white]  run a mission through the Agent Runtime
+  [white]mission status[/white]       show last mission execution trace
+  [white]tools[/white]               list all registered tools
   [white]exit[/white]                 quit
 
 [bold cyan]Just type naturally:[/bold cyan]
@@ -221,6 +225,15 @@ class AriaCLI:
             return
         if low.startswith("screenshot "):
             self._screenshot(prompt[11:].strip())
+            return
+        if low == "mission" or low.startswith("mission "):
+            self._mission(prompt[7:].strip())
+            return
+        if low == "runtime":
+            self._runtime_toggle()
+            return
+        if low == "tools":
+            self._tools_list()
             return
 
         # work-mode override
@@ -757,6 +770,56 @@ class AriaCLI:
         """Decompose into background tasks via the TaskManager."""
         result = self.orch.orchestrate(text)
         console.print(result)
+
+    # ── Agent Runtime commands ──────────────────────────────────────
+
+    def _mission(self, arg: str) -> None:
+        """Run a mission through the Agent Runtime."""
+        if not arg:
+            # Show mission status
+            status = self.orch.mission_status()
+            console.print(status)
+            return
+        if arg == "status":
+            status = self.orch.mission_status()
+            console.print(status)
+            return
+        # Run a mission
+        if self.orch.runtime is None:
+            warn("Agent Runtime not enabled. Type 'runtime' to enable it.")
+            return
+        step(1, "Planning")
+        result = self.orch.dispatch_runtime(arg)
+        self.last_report = result
+        console.print()
+        console.print(Markdown(result[:6000]))
+
+    def _runtime_toggle(self) -> None:
+        """Toggle the Agent Runtime on/off."""
+        if self.orch.runtime is not None:
+            self.config.runtime_enabled = False
+            self.orch.runtime = None
+            warn("Agent Runtime disabled — using pipeline mode")
+        else:
+            self.config.runtime_enabled = True
+            self.orch._init_runtime()
+            ok("Agent Runtime enabled — using PLAN→ACT→OBSERVE→EVALUATE→REPLAN")
+            tools = self.orch._tool_registry.tool_count
+            info(f"{tools} tools registered")
+
+    def _tools_list(self) -> None:
+        """List all registered tools."""
+        if self.orch.runtime is None:
+            warn("Agent Runtime not enabled. Type 'runtime' to enable it.")
+            return
+        registry = self.orch._tool_registry
+        console.print("\n[bold cyan]Registered Tools[/bold cyan]")
+        for cat in registry.categories:
+            tools = registry.list_tools(category=cat)
+            console.print(f"\n  [bold]{cat}[/bold]")
+            for t in tools:
+                risk = t.risk_level.value
+                console.print(f"    {t.name} [{risk}] — {t.description[:60]}")
 
     def _print_report(self) -> None:
         self.orch.report.print()
