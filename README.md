@@ -2,6 +2,7 @@
 
 ```
 ProviderPool · Research · Build · Market · Deploy · Orchestrate · Memory · Audit
+Telegram · Browser · Scheduler · MCP
 ```
 
 ## What is ARIA?
@@ -69,6 +70,10 @@ User: "build a todo CLI app in Python"
 - **Learn** — extracts reusable skills from successful projects; writes lessons from failures
 - **Background tasks** — submit long-running work, check status, survive process restarts
 - **API server** — FastAPI mode with auth, for integration into other tools
+- **Telegram** — talk to ARIA from your phone (same memory, skills, tools)
+- **Browser** — headless Playwright for JS-rendered pages, screenshots, Google search
+- **Scheduler** — autonomous tasks: "every morning research AI news and send summary"
+- **MCP** — plug in external tool servers via Model Context Protocol
 
 ---
 
@@ -161,11 +166,17 @@ ultra/
 ├── audit.py          append-only operation log
 ├── evaluator.py      quality scoring + build circuit breaker
 ├── task_manager.py   persistent background queue
+├── scheduler.py      cron-style autonomous task execution
 ├── orchestrator.py   the Brain: dispatch, agent registry, pipelines
 ├── api.py            FastAPI mode
+├── channels/         multi-interface adapters
+│   ├── __init__.py   NormalizedMessage abstraction
+│   └── telegram.py   Telegram bot channel
 ├── agents/           research, market, architect, coder, reviewer,
 │                     debugger, tester, deployer, trainer, engineering pipeline
-├── tools/            safe bash, diff editor, web researcher (Bing + citations)
+├── tools/            safe bash, diff editor, web researcher, browser, MCP
+│   ├── browser.py    Playwright headless browser
+│   └── mcp_client.py Model Context Protocol client
 └── core/             memory (SQLite+FTS5), vectors (embeddings), skills (SKILL.md)
 ```
 

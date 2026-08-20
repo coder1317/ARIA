@@ -46,6 +46,13 @@ HELP = """[bold cyan]Commands[/bold cyan]
   [white]model list[/white]           show pulled Ollama models
   [white]model set <name>[/white]     switch active model (e.g. lfm2.5:latest)
   [white]model show[/white]           show current model config
+  [white]telegram[/white]             start Telegram bot (needs TELEGRAM_BOT_TOKEN)
+  [white]schedule list[/white]        show scheduled tasks
+  [white]schedule add ...[/white]     add a scheduled task
+  [white]schedule run [id][/white]    run a task now
+  [white]mcp status[/white]           show MCP server connections
+  [white]browse <url>[/white]         open page in headless browser
+  [white]screenshot <url>[/white]     capture page screenshot
   [white]exit[/white]                 quit
 
 [bold cyan]Just type naturally:[/bold cyan]
@@ -195,6 +202,21 @@ class AriaCLI:
             return
         if low == "model show":
             self._model_show()
+            return
+        if low == "telegram":
+            self._telegram()
+            return
+        if low.startswith("schedule"):
+            self._schedule(prompt[8:].strip())
+            return
+        if low.startswith("mcp"):
+            self._mcp(prompt[3:].strip())
+            return
+        if low.startswith("browse "):
+            self._browse(prompt[7:].strip())
+            return
+        if low.startswith("screenshot "):
+            self._screenshot(prompt[11:].strip())
             return
 
         # work-mode override
@@ -457,6 +479,203 @@ class AriaCLI:
             f"{p.name}({p.model})" for p in self.config.providers))
         console.print()
         info("Switch: model set <name>  |  List: model list")
+
+    # ── telegram ────────────────────────────────────────────────
+
+    def _telegram(self) -> None:
+        """Start the Telegram bot channel."""
+        import asyncio
+        from ultra.channels.telegram import TelegramChannel, _HAS_TELEGRAM
+        if not _HAS_TELEGRAM:
+            warn("python-telegram-bot not installed.")
+            info("Install: pip install python-telegram-bot")
+            return
+        if not self.config.telegram_token:
+            warn("No Telegram token configured.")
+            info("Set TELEGRAM_BOT_TOKEN in .env")
+            return
+
+        def dispatch(msg):
+            return self.orch.dispatch(msg.text)
+
+        channel = TelegramChannel(
+            token=self.config.telegram_token,
+            dispatch_fn=dispatch,
+            allowed_users=self.config.telegram_allowed_users or None,
+        )
+        ok(f"Starting Telegram bot (allowed: {self.config.telegram_allowed_users or 'everyone'})")
+        info("Press Ctrl+C to stop")
+        try:
+            asyncio.run(channel.start())
+            # keep running until interrupted
+            import time
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            console.print("\nStopping...")
+            asyncio.run(channel.stop())
+
+    # ── scheduler ────────────────────────────────────────────────
+
+    def _schedule(self, arg: str) -> None:
+        """Handle schedule commands."""
+        from ultra.scheduler import Scheduler
+        db_path = self.config.data_dir / "memory" / "scheduler.db"
+        scheduler = Scheduler(db_path, dispatch_fn=self.orch.dispatch)
+        low = arg.lower()
+
+        if not low or low == "list":
+            tasks = scheduler.list_tasks()
+            if not tasks:
+                info("No scheduled tasks.")
+                info("Add: schedule add name='daily research' command='research AI news' daily=08:00")
+                return
+            console.print("\n[bold cyan]Scheduled tasks[/bold cyan]")
+            for t in tasks:
+                status = "enabled" if t.enabled else "disabled"
+                console.print(
+                    f"  [{t.id}] {t.name} — {t.command[:50]}\n"
+                    f"       {t.schedule_type} | {status} | next: {t.next_run[:16]}")
+            console.print()
+            return
+
+        if low.startswith("add "):
+            # parse: schedule add name='x' command='y' daily=08:00
+            #     or: schedule add name='x' command='y' interval=3600
+            import re as _re
+            params = {}
+            for m in _re.finditer(r"(\w+)=('[^']*'|\"[^\"]*\"|\S+)", arg[4:]):
+                k, v = m.group(1), m.group(2).strip("'\"")
+                params[k] = v
+            name = params.get("name", "unnamed")
+            command = params.get("command", "")
+            if not command:
+                warn("usage: schedule add name='x' command='research AI news' daily=08:00")
+                return
+            if "daily" in params:
+                task = scheduler.add(name, command, "daily_time",
+                                     daily_time=params["daily"])
+            elif "interval" in params:
+                task = scheduler.add(name, command, "interval",
+                                     interval_seconds=int(params["interval"]))
+            else:
+                task = scheduler.add(name, command, "once", interval_seconds=3600)
+            ok(f"Scheduled: {task.name} (id={task.id}, next: {task.next_run[:16]})")
+            return
+
+        if low.startswith("run "):
+            try:
+                task_id = int(arg[4:].strip())
+            except ValueError:
+                warn("usage: schedule run <id>")
+                return
+            task = scheduler.get(task_id)
+            if not task:
+                warn(f"Task {task_id} not found")
+                return
+            info(f"Running: {task.name}...")
+            result = scheduler._execute_task(task)
+            console.print(result[:3000])
+            return
+
+        if low.startswith("remove ") or low.startswith("rm "):
+            try:
+                task_id = int(arg.split()[1])
+            except (ValueError, IndexError):
+                warn("usage: schedule remove <id>")
+                return
+            if scheduler.remove(task_id):
+                ok(f"Removed task {task_id}")
+            else:
+                warn(f"Task {task_id} not found")
+            return
+
+        warn(f"Unknown schedule command: {arg}")
+        info("Usage: schedule list | schedule add ... | schedule run <id> | schedule remove <id>")
+
+    # ── MCP ──────────────────────────────────────────────────────
+
+    def _mcp(self, arg: str) -> None:
+        """Handle MCP commands."""
+        import asyncio
+        from ultra.tools.mcp_client import MCPManager, _HAS_MCP
+        if not _HAS_MCP:
+            warn("MCP not installed.")
+            info("Install: pip install mcp")
+            return
+        low = arg.lower()
+        manager = MCPManager()
+        if not manager.servers:
+            info("No MCP servers configured.")
+            info("Set ARIA_MCP_SERVERS in .env (e.g. filesystem:npx -y @modelcontextprotocol/server-filesystem /tmp)")
+            return
+        if not low or low == "status":
+            asyncio.run(manager.start())
+            status = manager.get_status()
+            console.print("\n[bold cyan]MCP servers[/bold cyan]")
+            for name, info_dict in status.items():
+                color = "green" if info_dict["connected"] else "red"
+                console.print(
+                    f"  {name} [{color}]{info_dict['connected']}[/{color}] "
+                    f"tools: {', '.join(info_dict['tool_names']) or 'none'}")
+            console.print()
+            asyncio.run(manager.stop())
+
+    # ── browser ──────────────────────────────────────────────────
+
+    def _browse(self, url: str) -> None:
+        """Browse a URL with the headless browser."""
+        import asyncio
+        from ultra.tools.browser import Browser, _HAS_PLAYWRIGHT
+        if not _HAS_PLAYWRIGHT:
+            warn("Playwright not installed.")
+            info("Install: pip install playwright && playwright install chromium")
+            return
+        if not url:
+            warn("usage: browse <url>")
+            return
+        if not url.startswith("http"):
+            url = "https://" + url
+        info(f"Browsing {url}...")
+        browser = Browser()
+        try:
+            result = asyncio.run(browser.goto(url))
+            if result.error:
+                warn(f"Error: {result.error}")
+                return
+            label("Title:", result.title)
+            label("URL:", result.url)
+            console.print(result.text[:4000])
+            if result.links:
+                info(f"\n{len(result.links)} links found")
+        finally:
+            asyncio.run(browser.close())
+
+    def _screenshot(self, url: str) -> None:
+        """Take a screenshot of a URL."""
+        import asyncio
+        from ultra.tools.browser import Browser, _HAS_PLAYWRIGHT
+        if not _HAS_PLAYWRIGHT:
+            warn("Playwright not installed.")
+            info("Install: pip install playwright && playwright install chromium")
+            return
+        if not url:
+            warn("usage: screenshot <url>")
+            return
+        if not url.startswith("http"):
+            url = "https://" + url
+        out = str(self.config.data_dir / "screenshots" / f"{url.split('//')[-1][:50]}.png")
+        info(f"Screenshotting {url}...")
+        browser = Browser()
+        try:
+            result = asyncio.run(browser.screenshot(url, out))
+            if result.error:
+                warn(f"Error: {result.error}")
+                return
+            ok(f"Saved: {result.screenshot_path}")
+            label("Title:", result.title)
+        finally:
+            asyncio.run(browser.close())
 
     def _orchestrate(self, text: str) -> None:
         """Decompose into background tasks via the TaskManager."""

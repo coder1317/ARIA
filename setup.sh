@@ -18,7 +18,11 @@ source .venv/bin/activate
 echo "▶ Installing Python dependencies"
 pip install --quiet --upgrade pip
 pip install --quiet -r requirements.txt
-pip install --quiet -e .
+pip install --quiet -e "[all]" 2>/dev/null || pip install --quiet -e .
+echo "  Installing optional: telegram, browser, mcp"
+pip install --quiet python-telegram-bot playwright mcp 2>/dev/null || true
+# Install Playwright chromium browser
+.venv/bin/playwright install chromium 2>/dev/null || echo "  (Playwright chromium skipped — install manually: playwright install chromium)"
 
 # 3. Ollama (if missing)
 if ! command -v ollama >/dev/null 2>&1; then
