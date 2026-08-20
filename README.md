@@ -2,7 +2,7 @@
 
 ```
 ProviderPool · Research · Build · Market · Deploy · Orchestrate · Memory · Audit
-Telegram · Browser · Scheduler · MCP
+Telegram · Browser · Scheduler · MCP · Agent Runtime
 ```
 
 ## What is ARIA?
@@ -74,6 +74,7 @@ User: "build a todo CLI app in Python"
 - **Browser** — headless Playwright for JS-rendered pages, screenshots, Google search
 - **Scheduler** — autonomous tasks: "every morning research AI news and send summary"
 - **MCP** — plug in external tool servers via Model Context Protocol
+- **Agent Runtime** — autonomous PLAN→ACT→OBSERVE→EVALUATE→REPLAN loop with unified Tool Registry. ARIA plans steps, executes tools, observes results, and replans on failure — a genuine agent, not a pipeline.
 
 ---
 
@@ -142,6 +143,10 @@ ARIA > skill list                            # list installed skills
 ARIA > browse https://example.com            # headless browser
 ARIA > schedule add name='news' command='research AI news' daily=08:00
 ARIA > telegram                              # start Telegram bot
+ARIA > runtime                              # toggle Agent Runtime on/off
+ARIA > mission build a Flask REST API        # run a mission through the runtime
+ARIA > mission status                        # show last mission execution trace
+ARIA > tools                                 # list all registered tools
 ```
 
 ## Skills
@@ -195,6 +200,31 @@ curl -X POST localhost:8000/process -d '{"objective": "research ollama"}' -H 'Co
 The API binds to `127.0.0.1` by default. Set `ARIA4_API_TOKEN` in `.env`
 to require `Authorization: Bearer <token>` on every request; only bind
 `0.0.0.0` (via `ARIA4_API_HOST`) when a token is set.
+
+## Agent Runtime
+
+ARIA includes an autonomous agent loop that transforms it from a
+pipeline engine into a genuine agent. Enable it with `runtime` in the
+CLI or set `ARIA4_RUNTIME=1` in `.env`.
+
+```
+ARIA > runtime                              # toggle on/off
+ARIA > mission build a Flask REST API       # autonomous plan → execute → verify
+ARIA > mission status                        # execution trace
+ARIA > tools                                 # list registered tools
+```
+
+How it works:
+
+1. **Plan** — LLM decomposes your objective into concrete steps
+2. **Act** — Execute each step via the unified Tool Registry
+3. **Observe** — Capture tool results and LLM analysis
+4. **Evaluate** — Did the step succeed? Should we continue?
+5. **Replan** — If a step fails, create alternative steps
+
+Available tools: `terminal.execute`, `filesystem.read/write/list/search`,
+`memory.search/remember`, `web.search/fetch`, `skills.list/get/search`,
+`model.list/health`, plus any MCP tools.
 
 ## Architecture
 
