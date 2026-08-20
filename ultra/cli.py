@@ -38,8 +38,12 @@ HELP = """[bold cyan]Commands[/bold cyan]
   [white]memory[/white]               show memory stats + facts
   [white]memory fact key: val[/white] save a fact about you
   [white]memory recall [q][/white]    search past conversations
-  [white]skill list[/white]           list skills
+  [white]skill list[/white]           list installed skills
+  [white]skill install [repo][/white] install from GitHub (owner/repo)
+  [white]skill search [q][/white]     search GitHub for aria-skill repos
+  [white]skill show [name][/white]    show skill details
   [white]skill extract [project][/white]  learn a skill from a project
+  [white]skill uninstall [name][/white]   remove a skill
   [white]tasks[/white]               list background tasks
   [white]audit [n][/white]           show last n audit-log entries
   [white]api [port][/white]          start the FastAPI server (8000)
@@ -331,22 +335,92 @@ class AriaCLI:
         warn("usage: memory | memory fact key: value | memory recall query")
 
     def _skill(self, arg: str) -> None:
-        if arg == "list":
+        low = arg.lower().strip()
+
+        if not low or low == "list":
             skills = self.skills.list()
             if not skills:
-                warn("no skills loaded")
+                warn("no skills installed")
+                info("Install from GitHub: skill install owner/repo")
                 return
+            console.print("\n[bold cyan]Installed skills[/bold cyan]")
             for s in skills:
-                label(s.name, s.description)
+                ver = f" v{s.version}" if s.version else ""
+                src = f" ({s.source_repo})" if s.source_repo else ""
+                console.print(f"  {s.name}{ver}{src}")
+                if s.description:
+                    console.print(f"    {s.description[:80]}")
+            console.print()
             return
-        if arg.startswith("show "):
+
+        if low.startswith("show "):
             skill = self.skills.get(arg[5:].strip())
             if skill:
-                console.print(skill.body[:2000])
+                label("Name:", skill.name)
+                if skill.version:
+                    label("Version:", skill.version)
+                if skill.author:
+                    label("Author:", skill.author)
+                if skill.source_repo:
+                    label("Source:", skill.source_repo)
+                if skill.tags:
+                    label("Tags:", ", ".join(skill.tags))
+                console.print(f"\n{skill.body[:2000]}")
             else:
                 warn("skill not found")
             return
-        if arg.startswith("extract"):
+
+        if low.startswith("install "):
+            repo = arg[8:].strip()
+            if not repo or "/" not in repo:
+                warn("usage: skill install owner/repo")
+                info("Example: skill install coder1317/pcb-design")
+                return
+            info(f"Installing {repo}...")
+            skill = self.skills.install(repo)
+            if skill:
+                ok(f"Installed: {skill.name} v{skill.version or '?'}")
+                if skill.description:
+                    info(skill.description[:120])
+            else:
+                warn(f"Failed to install {repo}")
+                info("Check the repo exists and contains SKILL.md or skill.json")
+            return
+
+        if low.startswith("uninstall ") or low.startswith("remove "):
+            name = arg.split(None, 1)[1].strip() if " " in arg else ""
+            if not name:
+                warn("usage: skill uninstall <name>")
+                return
+            if self.skills.uninstall(name):
+                ok(f"Removed skill: {name}")
+            else:
+                warn(f"Skill '{name}' not found")
+            return
+
+        if low.startswith("search "):
+            query = arg[7:].strip()
+            if not query:
+                warn("usage: skill search <query>")
+                return
+            info(f"Searching GitHub for '{query}'...")
+            results = self.skills.search_github(query)
+            if not results:
+                warn("no results found")
+                info("Tip: tag your skill repo with 'aria-skill' on GitHub")
+                return
+            console.print(f"\n[bold cyan]GitHub skills: {query}[/bold cyan]")
+            for r in results:
+                stars = f" ⭐{r['stars']}" if r["stars"] else ""
+                console.print(f"  {r['repo']}{stars}")
+                if r["description"]:
+                    console.print(f"    {r['description'][:80]}")
+                console.print(f"    {r['url']}")
+            console.print()
+            info("Install: skill install <owner/repo>")
+            return
+
+        if low.startswith("extract"):
             target = arg[8:].strip()
             path = Path(target).expanduser() if target else self.orch.last_project
             if path is None or not Path(path).is_dir():
@@ -356,7 +430,9 @@ class AriaCLI:
             if name:
                 ok(f"extracted skill: {name}")
             return
-        warn("usage: skill list | skill show <name> | skill extract <project>")
+
+        warn("unknown skill command")
+        info("skill list | skill install <repo> | skill search <query> | skill show <name> | skill extract <project> | skill uninstall <name>")
 
     def _audit(self, arg: str) -> None:
         try:

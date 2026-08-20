@@ -136,7 +136,48 @@ ARIA > audit                           # last operations
 ARIA > mode 3                          # orchestrate — decomposes into background tasks
 ARIA > memory fact goal: GATE EC 2028  # permanent facts
 ARIA > skill extract ~/aria4_projects/myapp   # learn a skill from a project
+ARIA > skill search esp32                    # search GitHub for aria-skill repos
+ARIA > skill install coder1317/pcb-design    # install a skill from GitHub
+ARIA > skill list                            # list installed skills
+ARIA > browse https://example.com            # headless browser
+ARIA > schedule add name='news' command='research AI news' daily=08:00
+ARIA > telegram                              # start Telegram bot
 ```
+
+## Skills
+
+Skills are reusable instructions that make ARIA smarter at specific tasks.
+Install from GitHub (tag your repo with `aria-skill`):
+
+```bash
+ARIA > skill search esp32          # find skills on GitHub
+ARIA > skill install owner/repo   # install from GitHub
+ARIA > skill list                  # see what's installed
+ARIA > skill show pcb-design       # view skill details
+ARIA > skill uninstall pcb-design  # remove a skill
+```
+
+Skills are auto-matched to your requests — if you install a `pcb-design`
+skill and say "design a PCB", ARIA automatically uses it.
+
+You can also create skills from your own projects:
+
+```bash
+ARIA > skill extract ~/aria4_projects/myapp   # extract patterns into a skill
+```
+
+### Creating skill repos
+
+A skill repo needs either a `SKILL.md` or `skill.json` (or both):
+
+```
+my-skill/
+├── SKILL.md        # instructions with frontmatter
+├── skill.json      # metadata (version, tags, triggers)
+└── examples/       # optional code templates
+```
+
+Tag your repo with `aria-skill` on GitHub so others can find it.
 
 One-shot (non-interactive):
 
