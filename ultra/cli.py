@@ -44,6 +44,8 @@ HELP = """[bold cyan]Commands[/bold cyan]
   [white]audit [n][/white]           show last n audit-log entries
   [white]api [port][/white]          start the FastAPI server (8000)
   [white]model list[/white]           show pulled Ollama models
+  [white]model set <name>[/white]     switch active model (e.g. lfm2.5:latest)
+  [white]model show[/white]           show current model config
   [white]exit[/white]                 quit
 
 [bold cyan]Just type naturally:[/bold cyan]
@@ -185,8 +187,14 @@ class AriaCLI:
         if low.startswith("api"):
             self._api(prompt[3:].strip())
             return
-        if low == "model list":
+        if low == "model list" or low == "model":
             self._models()
+            return
+        if low.startswith("model set "):
+            self._model_set(prompt[10:].strip())
+            return
+        if low == "model show":
+            self._model_show()
             return
 
         # work-mode override
@@ -394,12 +402,61 @@ class AriaCLI:
         uvicorn.run(make_app(self.orch, self.config), host=host, port=port)
 
     def _models(self) -> None:
+        """Show available models and which one is active."""
         models = self.client.available_models()
         if not models:
             warn("no models pulled — run: ollama pull granite4.1:3b")
             return
+        console.print("\n[bold cyan]Available models[/bold cyan]")
         for m in models:
-            console.print(f"  {m}")
+            active = ""
+            if m == self.config.chat_model:
+                active = " [green]← chat + code (primary)[/green]"
+            elif m == self.config.fallback_model:
+                active = " [yellow]← fallback[/yellow]"
+            elif m == self.config.embed_model:
+                active = " [dim]← embeddings[/dim]"
+            console.print(f"  {m}{active}")
+        console.print()
+        label("Active:", f"chat={self.config.chat_model}  code={self.config.coding_model}  fallback={self.config.fallback_model}")
+        info("Use: model set <name> to switch the primary model")
+
+    def _model_set(self, name: str) -> None:
+        """Switch the active chat + coding model at runtime."""
+        if not name:
+            warn("usage: model set <model-name>")
+            info("Example: model set lfm2.5:latest")
+            return
+        models = self.client.available_models()
+        if name not in models:
+            warn(f"'{name}' not pulled. Available: {', '.join(models)}")
+            info(f"Pull it first: ollama pull {name}")
+            return
+        old = self.config.chat_model
+        self.config.chat_model = name
+        self.config.coding_model = name
+        # rebuild providers so the pool routes to the new model
+        from ultra.config import ProviderSpec
+        self.config.providers = Config._build_providers(self.config)
+        self.client = ProviderPool(self.config)
+        ok(f"Switched: {old} → {name}")
+        info(f"chat={self.config.chat_model}  code={self.config.coding_model}  fallback={self.config.fallback_model}")
+        self.audit.log(actor="user", action="model_switch",
+                       detail={"from": old, "to": name})
+
+    def _model_show(self) -> None:
+        """Show current model configuration."""
+        console.print("\n[bold cyan]Model configuration[/bold cyan]")
+        label("Chat model:", self.config.chat_model)
+        label("Code model:", self.config.coding_model)
+        label("Fallback:", self.config.fallback_model)
+        label("Embeddings:", self.config.embed_model)
+        label("LLM timeout:", f"{self.config.llm_timeout}s")
+        console.print()
+        label("Providers:", ", ".join(
+            f"{p.name}({p.model})" for p in self.config.providers))
+        console.print()
+        info("Switch: model set <name>  |  List: model list")
 
     def _orchestrate(self, text: str) -> None:
         """Decompose into background tasks via the TaskManager."""
