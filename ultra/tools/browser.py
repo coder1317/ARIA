@@ -174,6 +174,126 @@ class Browser:
         except Exception:
             return []
 
+    # ── Interaction methods ─────────────────────────────────────
+
+    async def click(self, url: str, selector: str) -> BrowserResult:
+        """Navigate to a page and click an element."""
+        try:
+            browser = await self._ensure_browser()
+            page = await browser.new_page()
+            await page.goto(url, wait_until="domcontentloaded", timeout=self.timeout_ms)
+            await page.click(selector, timeout=5000)
+            await page.wait_for_load_state("domcontentloaded")
+            title = await page.title()
+            text = await page.inner_text("body")
+            final_url = page.url
+            await page.close()
+            return BrowserResult(url=final_url, title=title, text=text[:30_000])
+        except Exception as e:
+            return BrowserResult(url=url, error=str(e), success=False)
+
+    async def type_text(self, url: str, selector: str, text: str,
+                        submit: bool = False) -> BrowserResult:
+        """Navigate, type into an input field, optionally submit."""
+        try:
+            browser = await self._ensure_browser()
+            page = await browser.new_page()
+            await page.goto(url, wait_until="domcontentloaded", timeout=self.timeout_ms)
+            await page.fill(selector, text, timeout=5000)
+            if submit:
+                await page.keyboard.press("Enter")
+                await page.wait_for_load_state("domcontentloaded")
+            title = await page.title()
+            body_text = await page.inner_text("body")
+            final_url = page.url
+            await page.close()
+            return BrowserResult(url=final_url, title=title, text=body_text[:30_000])
+        except Exception as e:
+            return BrowserResult(url=url, error=str(e), success=False)
+
+    async def select_option(self, url: str, selector: str,
+                            value: str) -> BrowserResult:
+        """Navigate and select an option from a dropdown."""
+        try:
+            browser = await self._ensure_browser()
+            page = await browser.new_page()
+            await page.goto(url, wait_until="domcontentloaded", timeout=self.timeout_ms)
+            await page.select_option(selector, value, timeout=5000)
+            title = await page.title()
+            text = await page.inner_text("body")
+            await page.close()
+            return BrowserResult(url=url, title=title, text=text[:30_000])
+        except Exception as e:
+            return BrowserResult(url=url, error=str(e), success=False)
+
+    async def scroll(self, url: str, direction: str = "down",
+                     pixels: int = 500) -> BrowserResult:
+        """Navigate and scroll the page."""
+        try:
+            browser = await self._ensure_browser()
+            page = await browser.new_page()
+            await page.goto(url, wait_until="domcontentloaded", timeout=self.timeout_ms)
+            if direction == "down":
+                await page.evaluate(f"window.scrollBy(0, {pixels})")
+            elif direction == "up":
+                await page.evaluate(f"window.scrollBy(0, -{pixels})")
+            elif direction == "bottom":
+                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            elif direction == "top":
+                await page.evaluate("window.scrollTo(0, 0)")
+            await page.wait_for_timeout(500)  # let lazy content load
+            title = await page.title()
+            text = await page.inner_text("body")
+            await page.close()
+            return BrowserResult(url=url, title=title, text=text[:30_000])
+        except Exception as e:
+            return BrowserResult(url=url, error=str(e), success=False)
+
+    async def inspect(self, url: str, selector: str = "body") -> BrowserResult:
+        """Inspect DOM elements — get HTML, text, attributes."""
+        try:
+            browser = await self._ensure_browser()
+            page = await browser.new_page()
+            await page.goto(url, wait_until="domcontentloaded", timeout=self.timeout_ms)
+            info = await page.evaluate("""(sel) => {
+                const el = document.querySelector(sel);
+                if (!el) return {error: 'selector not found'};
+                return {
+                    tag: el.tagName,
+                    text: el.innerText?.slice(0, 2000),
+                    html: el.outerHTML?.slice(0, 5000),
+                    attrs: Object.fromEntries(Array.from(el.attributes).map(a => [a.name, a.value])),
+                    children: el.children.length,
+                };
+            }""", selector)
+            await page.close()
+            if "error" in info:
+                return BrowserResult(url=url, error=info["error"], success=False)
+            text = info.get("text", "")
+            return BrowserResult(
+                url=url, title=info.get("tag", ""), text=text,
+                html=info.get("html", ""),
+            )
+        except Exception as e:
+            return BrowserResult(url=url, error=str(e), success=False)
+
+    async def download(self, url: str, selector: str, save_path: str) -> BrowserResult:
+        """Click a download link and save the file."""
+        try:
+            browser = await self._ensure_browser()
+            page = await browser.new_page()
+            await page.goto(url, wait_until="domcontentloaded", timeout=self.timeout_ms)
+            async with page.expect_download(timeout=30000) as download_info:
+                await page.click(selector)
+            download = await download_info.value
+            Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+            await download.save_as(save_path)
+            await page.close()
+            return BrowserResult(url=url, title=f"Downloaded to {save_path}",
+                                text=f"File saved: {save_path}")
+        except Exception as e:
+            return BrowserResult(url=url, error=str(e), success=False)
+
     async def close(self) -> None:
         if self._browser:
             await self._browser.close()
@@ -208,6 +328,52 @@ def screenshot(url: str, path: str, **kwargs) -> BrowserResult:
     browser = Browser()
     try:
         return asyncio.run(browser.screenshot(url, path, **kwargs))
+    finally:
+        try:
+            asyncio.run(browser.close())
+        except Exception:
+            pass
+
+
+def click_element(url: str, selector: str) -> BrowserResult:
+    browser = Browser()
+    try:
+        return asyncio.run(browser.click(url, selector))
+    finally:
+        try:
+            asyncio.run(browser.close())
+        except Exception:
+            pass
+
+
+def type_in_field(url: str, selector: str, text: str,
+                  submit: bool = False) -> BrowserResult:
+    browser = Browser()
+    try:
+        return asyncio.run(browser.type_text(url, selector, text, submit))
+    finally:
+        try:
+            asyncio.run(browser.close())
+        except Exception:
+            pass
+
+
+def scroll_page(url: str, direction: str = "down",
+                pixels: int = 500) -> BrowserResult:
+    browser = Browser()
+    try:
+        return asyncio.run(browser.scroll(url, direction, pixels))
+    finally:
+        try:
+            asyncio.run(browser.close())
+        except Exception:
+            pass
+
+
+def inspect_element(url: str, selector: str = "body") -> BrowserResult:
+    browser = Browser()
+    try:
+        return asyncio.run(browser.inspect(url, selector))
     finally:
         try:
             asyncio.run(browser.close())

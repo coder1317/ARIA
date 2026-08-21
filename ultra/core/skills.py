@@ -66,14 +66,38 @@ class SkillManager:
             return self._cache
         skills: dict[str, Skill] = {}
         if self.skills_dir.is_dir():
+            # 1. Load traditional SKILL.md folders (backward compatible)
             for folder in self.skills_dir.iterdir():
                 if not folder.is_dir():
                     continue
                 skill = self._load_skill(folder)
                 if skill:
                     skills[folder.name] = skill
+            # 2. Load .md files in subdirectories (new curated skills)
+            for md_file in self.skills_dir.rglob("*.md"):
+                if md_file.name == "SKILL.md":
+                    continue  # already loaded above
+                name = md_file.stem  # filename without extension
+                if name not in skills:
+                    skill = self._load_md_skill(md_file)
+                    if skill:
+                        skills[name] = skill
         self._cache = skills
         return skills
+
+    def _load_md_skill(self, md_file: Path) -> Skill | None:
+        """Load a skill from a standalone .md file."""
+        try:
+            text = md_file.read_text(encoding="utf-8")
+        except OSError:
+            return None
+        skill = self._parse(md_file.stem, text)
+        # Derive category from parent directory
+        parent = md_file.parent.name
+        if parent != "skills":
+            skill.tags = [parent]
+            skill.source_repo = f"skills/{parent}"
+        return skill
 
     def _load_skill(self, folder: Path) -> Skill | None:
         """Load a skill from a folder (SKILL.md + optional skill.json)."""
