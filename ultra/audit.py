@@ -51,6 +51,12 @@ class AuditLog:
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_actor ON audit_log(actor)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_ts ON audit_log(ts)")
+            # Migration: add hash columns to existing tables
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(audit_log)").fetchall()}
+            if "entry_hash" not in cols:
+                conn.execute("ALTER TABLE audit_log ADD COLUMN entry_hash TEXT NOT NULL DEFAULT ''")
+            if "prev_hash" not in cols:
+                conn.execute("ALTER TABLE audit_log ADD COLUMN prev_hash TEXT NOT NULL DEFAULT ''")
 
     @staticmethod
     def _compute_hash(ts: float, actor: str, action: str, detail: str,
