@@ -2,7 +2,7 @@
 
 ```
 ProviderPool · Research · Build · Market · Deploy · Orchestrate · Memory · Audit
-Telegram · Browser · Scheduler · MCP · Agent Runtime
+Telegram · Browser · Scheduler · MCP · Agent Runtime · EventBus · Goals · Watchers
 ```
 
 ## What is ARIA?
@@ -61,6 +61,25 @@ User: "build a todo CLI app in Python"
     Result    ──────── working project in ~/aria4_projects/<name>
 ```
 
+### Phase 3: Cognitive Core
+
+```
+                    ┌─────────────────────────┐
+                    │        EventBus          │
+                    │  pub/sub event system    │
+                    └────────┬────────────────┘
+                             │
+           ┌─────────────────┼─────────────────┐
+           │                 │                 │
+      FileWatcher     NotificationMgr    GoalManager
+      (detect changes)  (alert user)    (persistent goals)
+           │                 │                 │
+           └─────────────────┼─────────────────┘
+                             │
+                      Orchestrator
+                    (routes everything)
+```
+
 ### What ARIA can do today
 
 - **Research** — deep research with Bing, real citations, and a written report (saved to disk)
@@ -75,6 +94,11 @@ User: "build a todo CLI app in Python"
 - **Scheduler** — autonomous tasks: "every morning research AI news and send summary"
 - **MCP** — plug in external tool servers via Model Context Protocol
 - **Agent Runtime** — autonomous PLAN→ACT→OBSERVE→EVALUATE→REPLAN loop with unified Tool Registry. ARIA plans steps, executes tools, observes results, and replans on failure — a genuine agent, not a pipeline.
+- **EventBus** — central publish/subscribe event system. Every significant action emits events that other components react to. Decoupled, extensible architecture.
+- **File Watchers** — automatically detect file changes in project directories and emit events. ARIA reacts to created, modified, and deleted files.
+- **Goal Manager** — persistent goals ARIA tracks across sessions. Set objectives, track progress, mark completion. Goals influence ARIA's priorities.
+- **Notification Manager** — routes alerts to CLI, file, or Telegram. Auto-notifies on task completion, build results, provider failures.
+- **Production hardening** — empty response retry, thread-safe vectors, rate limiting, cloud health checks, multi-dimensional evaluation, audit hash chaining, loop detection.
 
 ---
 
@@ -147,6 +171,15 @@ ARIA > runtime                              # toggle Agent Runtime on/off
 ARIA > mission build a Flask REST API        # run a mission through the runtime
 ARIA > mission status                        # show last mission execution trace
 ARIA > tools                                 # list all registered tools
+ARIA > events                                # recent EventBus events
+ARIA > events stats                          # EventBus statistics
+ARIA > goal add Build production-ready ARIA  # add a goal
+ARIA > goal list                             # active goals
+ARIA > goal done 1                           # mark goal completed
+ARIA > goal progress 1 0.5                   # update progress
+ARIA > notify                                # recent notifications
+ARIA > watch                                 # watched directories
+ARIA > watch add ~/myproject                 # watch a directory
 ```
 
 ## Skills

@@ -9,6 +9,7 @@ Usage:
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 from rich.markdown import Markdown
@@ -26,7 +27,7 @@ from ultra.task_manager import TaskManager
 from ultra.tools.terminal import Terminal
 
 BANNER_TITLE = "ARIA — Autonomous Multi-Agent Assistant"
-BANNER_SUBTITLE = "ProviderPool · Research · Build · Market · Deploy · Orchestrate · Memory · Audit · Runtime"
+BANNER_SUBTITLE = "ProviderPool · Research · Build · Market · Deploy · Orchestrate · Memory · Audit · Runtime · Events · Goals"
 
 HELP = """[bold cyan]Commands[/bold cyan]
   [white]help[/white]                 this menu
@@ -68,6 +69,15 @@ HELP = """[bold cyan]Commands[/bold cyan]
   [white]episodes search [q][/white] search past events
   [white]procedures[/white]          view procedural memories (how to do things)
   [white]procedures search [q][/white] search known procedures
+  [white]events [n][/white]          show last n events from the EventBus
+  [white]events stats[/white]        show EventBus statistics
+  [white]goal add [title][/white]    add a new goal
+  [white]goal list[/white]           list active goals
+  [white]goal done [id][/white]      mark a goal as completed
+  [white]goal progress [id] [0-1][/white]  update goal progress
+  [white]notify[/white]              show recent notifications
+  [white]watch[/white]               show watched directories + recent changes
+  [white]watch add [path][/white]    add a directory to watch
   [white]exit[/white]                 quit
 
 [bold cyan]Just type naturally:[/bold cyan]
@@ -181,6 +191,10 @@ class AriaCLI:
 
     def _shutdown(self) -> None:
         try:
+            self.orch.watcher.stop()
+        except Exception:
+            pass
+        try:
             self.tasks.shutdown()
         except Exception:
             pass
@@ -270,6 +284,18 @@ class AriaCLI:
         if low == "tools":
             self._tools_list()
             return
+        if low == "events" or low.startswith("events "):
+            self._events(prompt[6:].strip())
+            return
+        if low == "goal" or low.startswith("goal "):
+            self._goal(prompt[4:].strip())
+            return
+        if low == "notify":
+            self._notify()
+            return
+        if low == "watch" or low.startswith("watch "):
+            self._watch(prompt[5:].strip())
+            return
 
         # work-mode override
         if self.work_mode == "research":
@@ -308,6 +334,15 @@ class AriaCLI:
              f"{stats['projects']} projects · {stats['lessons']} lessons")
         build_circuit = self.orch.status()["build_circuit"]
         info(f"build circuit: {build_circuit}")
+        # Phase 3: EventBus + Goals + Watchers
+        bus_stats = self.orch.event_bus.stats()
+        info(f"events: {bus_stats['total_emitted']} emitted · {bus_stats['subscriber_count']} subscribers")
+        goal_stats = self.orch.goals.stats()
+        active = goal_stats.get('active', 0) + goal_stats.get('in_progress', 0)
+        info(f"goals: {active} active · {goal_stats.get('completed', 0)} completed")
+        info(f"watching: {self.orch.watcher.watched_count} directories")
+        notify_stats = self.orch.notify.stats()
+        info(f"notifications: {sum(notify_stats.values())} total ({notify_stats.get('error', 0)} errors)")
 
     def _mode(self, arg: str) -> None:
         mode = WORK_MODES.get(arg.lower())
@@ -952,6 +987,199 @@ class AriaCLI:
             label("Title:", result.title)
         finally:
             asyncio.run(browser.close())
+
+    # ── Phase 3: EventBus, Goals, Watchers, Notifications ─────────
+
+    def _events(self, arg: str) -> None:
+        """Show recent events or EventBus stats."""
+        bus = self.orch.event_bus
+        if arg == "stats":
+            stats = bus.stats()
+            console.print("\n[bold cyan]EventBus Statistics[/bold cyan]")
+            label("Total emitted:", stats["total_emitted"])
+            label("Subscribers:", stats["subscriber_count"])
+            label("History size:", stats["history_size"])
+            if stats["event_types"]:
+                console.print("\n[bold]Event Types[/bold]")
+                for etype, count in sorted(stats["event_types"].items(),
+                                           key=lambda x: -x[1]):
+                    info(f"  {etype}: {count}")
+            console.print()
+            return
+        try:
+            n = int(arg.strip() or "15")
+        except ValueError:
+            n = 15
+        events = bus.history(limit=n)
+        if not events:
+            warn("no events recorded yet")
+            return
+        console.print(f"\n[bold cyan]Recent Events ({len(events)})[/bold cyan]")
+        for e in events:
+            ts = time.strftime("%H:%M:%S", time.localtime(e.timestamp))
+            icon = {"task.completed": "✓", "task.failed": "✗",
+                    "build.started": "🔨", "build.completed": "✓",
+                    "research.completed": "📚", "system.startup": "🟢",
+                    "notification": "🔔"}.get(e.type, "•")
+            info(f"  [{ts}] {icon} {e.type}  from={e.source}")
+            if e.payload:
+                detail = str(e.payload)[:100]
+                console.print(f"    [dim]{detail}[/dim]")
+        console.print()
+
+    def _goal(self, arg: str) -> None:
+        """Manage goals."""
+        goals = self.orch.goals
+        low = arg.lower().strip()
+
+        if not low or low == "list":
+            active = goals.list_active()
+            if not active:
+                info("No active goals.")
+                info("Add: goal add <title>")
+                return
+            console.print("\n[bold cyan]Active Goals[/bold cyan]")
+            for g in active:
+                priority = {0: "🔴", 1: "🟡", 2: "🔵", 3: "⚪"}.get(g.priority, "⚪")
+                pct = f"{g.progress:.0%}" if g.progress > 0 else "new"
+                console.print(f"  {priority} [{g.id}] {g.title}  {pct}")
+                if g.description:
+                    console.print(f"    {g.description[:80]}")
+            console.print()
+            return
+
+        if low.startswith("add "):
+            title = arg[4:].strip()
+            if not title:
+                warn("usage: goal add <title>")
+                return
+            goal = goals.add(title)
+            ok(f"Goal #{goal.id} added: {title}")
+            self.orch.event_bus.emit("goal.added", {"goal_id": goal.id, "title": title},
+                                    source="cli")
+            return
+
+        if low.startswith("done "):
+            try:
+                gid = int(arg[5:].strip())
+            except ValueError:
+                warn("usage: goal done <id>")
+                return
+            if goals.complete(gid):
+                ok(f"Goal #{gid} completed!")
+                self.orch.event_bus.emit("goal.completed", {"goal_id": gid}, source="cli")
+            else:
+                warn(f"Goal #{gid} not found")
+            return
+
+        if low.startswith("progress "):
+            parts = arg[9:].strip().split()
+            if len(parts) < 2:
+                warn("usage: goal progress <id> <0.0-1.0>")
+                return
+            try:
+                gid = int(parts[0])
+                pct = float(parts[1])
+            except ValueError:
+                warn("usage: goal progress <id> <0.0-1.0>")
+                return
+            notes = " ".join(parts[2:]) if len(parts) > 2 else ""
+            if goals.update_progress(gid, pct, notes):
+                ok(f"Goal #{gid} progress: {pct:.0%}")
+            else:
+                warn(f"Goal #{gid} not found")
+            return
+
+        if low.startswith("abandon "):
+            try:
+                gid = int(arg[8:].strip())
+            except ValueError:
+                warn("usage: goal abandon <id>")
+                return
+            if goals.abandon(gid):
+                ok(f"Goal #{gid} abandoned")
+            else:
+                warn(f"Goal #{gid} not found")
+            return
+
+        if low.startswith("completed"):
+            done = goals.list_completed(limit=10)
+            if not done:
+                info("No completed goals yet.")
+                return
+            console.print("\n[bold cyan]Completed Goals[/bold cyan]")
+            for g in done:
+                info(f"  ✓ [{g.id}] {g.title}  (completed {g.completed_at[:10]})")
+            console.print()
+            return
+
+        warn("usage: goal list | goal add <title> | goal done <id> | goal progress <id> <pct> | goal abandon <id> | goal completed")
+
+    def _notify(self) -> None:
+        """Show recent notifications."""
+        notifs = self.orch.notify.recent(15)
+        if not notifs:
+            info("No notifications yet.")
+            return
+        console.print("\n[bold cyan]Recent Notifications[/bold cyan]")
+        for n in notifs:
+            color = {"info": "white", "warning": "yellow",
+                     "error": "red", "success": "green"}.get(n.level, "white")
+            console.print(f"  [{color}]{n}[/color]")
+        console.print()
+        stats = self.orch.notify.stats()
+        info(f"Total: {sum(stats.values())} ({stats.get('info', 0)} info, "
+             f"{stats.get('warning', 0)} warn, {stats.get('error', 0)} errors)")
+
+    def _watch(self, arg: str) -> None:
+        """Manage file watchers."""
+        watcher = self.orch.watcher
+        low = arg.lower().strip()
+
+        if not low or low == "list":
+            summary = watcher.snapshot_summary()
+            if not summary:
+                info("No directories being watched.")
+                info("Use: watch add <path>")
+                return
+            console.print("\n[bold cyan]Watched Directories[/bold cyan]")
+            for path, count in summary.items():
+                info(f"  {path} ({count} files)")
+            console.print()
+            # Start polling if not running
+            if not watcher._running:
+                watcher.start(interval=10)
+                info("FileWatcher started (polling every 10s)")
+            return
+
+        if low.startswith("add "):
+            path = Path(arg[4:].strip()).expanduser().resolve()
+            if not path.is_dir():
+                warn(f"Not a directory: {path}")
+                return
+            watcher.watch(path)
+            ok(f"Now watching: {path}")
+            if not watcher._running:
+                watcher.start(interval=10)
+            return
+
+        if low.startswith("remove "):
+            path = Path(arg[7:].strip()).expanduser().resolve()
+            watcher.unwatch(path)
+            ok(f"Stopped watching: {path}")
+            return
+
+        if low == "start":
+            watcher.start(interval=10)
+            ok("FileWatcher started")
+            return
+
+        if low == "stop":
+            watcher.stop()
+            ok("FileWatcher stopped")
+            return
+
+        warn("usage: watch | watch add <path> | watch remove <path> | watch start | watch stop")
 
     def _orchestrate(self, text: str) -> None:
         """Decompose into background tasks via the TaskManager."""
