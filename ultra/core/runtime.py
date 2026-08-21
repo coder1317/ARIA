@@ -243,36 +243,32 @@ class AgentRuntime:
 
         system = (
             "You are ARIA's planner. Given an objective and available tools, "
-            "create a step-by-step plan. Each step should be a concrete action "
-            "that uses one or more tools.\n\n"
-            "Rules:\n"
-            "- Keep plans to 1-8 steps\n"
+            "create a step-by-step plan. Each step must use a REAL tool from "
+            "the list below.\n\n"
+            "CRITICAL RULES:\n"
+            "- NEVER use terminal.execute with natural language. It runs shell commands.\n"
+            "- To write a file, use filesystem.write with path and content args.\n"
+            "- To run a shell command, use terminal.execute with a real shell command.\n"
+            "- Keep plans to 1-5 steps\n"
+            "- Each step should do ONE thing\n"
             "- Steps with dependencies must list them in depends_on\n"
-            "- Make steps concrete and measurable\n"
-            "- Research before building when the topic is unfamiliar\n"
-            "- Test after building\n"
-            f"{tools_prompt}"
+            "- Make args concrete: real file paths, real content, real commands\n"
+            f"{tools_prompt}\n\n"
+            "EXAMPLE valid plan for 'write hello to a file':\n"
+            '{"steps": [{"id": "s1", "description": "write file", '
+            '"tool": "filesystem.write", '
+            '"args": {"path": "test.txt", "content": "hello"}, '
+            '"depends_on": []}]}'
         )
 
         prompt = (
             f"Objective: {objective}\n\n"
             "Create a plan. Return ONLY a JSON object:\n"
-            "```json\n"
-            '{\n'
-            '  "steps": [\n'
-            '    {\n'
-            '      "id": "step_1",\n'
-            '      "description": "what to do",\n'
-            '      "tool": "tool.name",\n'
-            '      "args": {"param": "value"},\n'
-            '      "depends_on": []\n'
-            '    }\n'
-            '  ]\n'
-            '}\n'
-            "```\n"
-            "Use tool names exactly as listed above. "
-            "For steps that need multiple tools, list the most important one "
-            "as 'tool' and describe the rest in the description."
+            '  {"steps": [{"id": "step_1", "description": "what to do", '
+            '"tool": "tool.name", "args": {"param": "value"}, '
+            '"depends_on": []}]}\n\n'
+            "Use EXACT tool names from the list above. "
+            "Put real values in args, not descriptions."
         )
 
         try:
