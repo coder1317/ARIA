@@ -61,6 +61,13 @@ HELP = """[bold cyan]Commands[/bold cyan]
   [white]mission <objective>[/white]  run a mission through the Agent Runtime
   [white]mission status[/white]       show last mission execution trace
   [white]tools[/white]               list all registered tools
+  [white]profile[/white]             show user profile (preferences, goals)
+  [white]profile set k v[/white]     update profile field
+  [white]profile goal [desc][/white] add an active goal
+  [white]episodes[/white]            view episodic memories (what happened)
+  [white]episodes search [q][/white] search past events
+  [white]procedures[/white]          view procedural memories (how to do things)
+  [white]procedures search [q][/white] search known procedures
   [white]exit[/white]                 quit
 
 [bold cyan]Just type naturally:[/bold cyan]
@@ -204,6 +211,15 @@ class AriaCLI:
             return
         if low.startswith("api"):
             self._api(prompt[3:].strip())
+            return
+        if low == "profile" or low.startswith("profile "):
+            self._profile(prompt[7:].strip())
+            return
+        if low == "episodes" or low.startswith("episodes "):
+            self._episodes(prompt[8:].strip())
+            return
+        if low == "procedures" or low.startswith("procedures "):
+            self._procedures(prompt[11:].strip())
             return
         if low == "model list" or low == "model":
             self._models()
@@ -494,6 +510,157 @@ class AriaCLI:
             info(f"error: {t.error}")
         if t.result:
             console.print(str(t.result)[:800])
+
+    # ── Phase 2: memory intelligence ──────────────────────────────
+
+    def _profile(self, arg: str) -> None:
+        """View or update user profile."""
+        from ultra.core.memory2 import MemoryV2, UserProfile
+        from ultra.core.vectors import VectorStore
+        db = self.config.data_dir / "memory" / "memory.db"
+        vec_db = self.config.data_dir / "memory" / "vectors.db"
+        vectors = VectorStore(vec_db)
+        mem2 = MemoryV2(db, vectors)
+
+        if not arg or arg == "show":
+            profile = mem2.get_user_profile()
+            console.print("\n[bold cyan]User Profile[/bold cyan]")
+            label("Name:", profile.name or "(not set)")
+            label("OS:", profile.os)
+            label("Language:", profile.preferred_language)
+            label("Editor:", profile.preferred_editor)
+            label("Model:", profile.preferred_model)
+            label("Style:", profile.response_style)
+            if profile.hardware:
+                label("Hardware:", ", ".join(profile.hardware))
+            if profile.skills:
+                label("Skills:", ", ".join(profile.skills))
+            if profile.active_goals:
+                label("Active goals:", ", ".join(profile.active_goals))
+            if profile.long_term_goals:
+                label("Long-term:", ", ".join(profile.long_term_goals))
+            if profile.facts:
+                console.print("\n[bold]Facts[/bold]")
+                for k, v in profile.facts.items():
+                    info(f"  {k}: {v}")
+            console.print()
+            return
+
+        # profile set key value
+        if arg.startswith("set "):
+            parts = arg[4:].strip().split(" ", 1)
+            if len(parts) == 2:
+                key, value = parts
+                profile = mem2.get_user_profile()
+                if hasattr(profile, key):
+                    setattr(profile, key, value)
+                    mem2.set_user_profile(profile)
+                    ok(f"profile.{key} = {value}")
+                else:
+                    # Store as custom fact
+                    profile.facts[key] = value
+                    mem2.set_user_profile(profile)
+                    ok(f"profile.facts[{key}] = {value}")
+            else:
+                warn("usage: profile set <key> <value>")
+            return
+
+        if arg.startswith("goal "):
+            goal = arg[5:].strip()
+            if goal:
+                profile = mem2.get_user_profile()
+                profile.active_goals.append(goal)
+                mem2.set_user_profile(profile)
+                ok(f"goal added: {goal}")
+            else:
+                warn("usage: profile goal <description>")
+            return
+
+        warn("usage: profile | profile show | profile set key value | profile goal desc")
+
+    def _episodes(self, arg: str) -> None:
+        """View episodic memories."""
+        from ultra.core.memory2 import MemoryV2
+        from ultra.core.vectors import VectorStore
+        db = self.config.data_dir / "memory" / "memory.db"
+        vec_db = self.config.data_dir / "memory" / "vectors.db"
+        vectors = VectorStore(vec_db)
+        mem2 = MemoryV2(db, vectors)
+
+        if not arg or arg == "list":
+            episodes = mem2.get_episodes(limit=10)
+            if not episodes:
+                warn("no episodes recorded yet")
+                return
+            console.print("\n[bold cyan]Recent Episodes[/bold cyan]")
+            for ep in episodes:
+                icon = {"success": "✓", "failure": "✗", "partial": "~"}.get(
+                    ep.get("outcome", ""), "•")
+                imp = ep.get("importance", 0)
+                color = "green" if imp > 0.7 else "yellow" if imp > 0.4 else "dim"
+                console.print(
+                    f"  [{color}]{icon} {ep['event_type']}[/{color}] "
+                    f"{ep['summary'][:100]}")
+                if ep.get("project"):
+                    info(f"    project: {ep['project']}")
+            console.print()
+            return
+
+        if arg.startswith("search "):
+            query = arg[7:].strip()
+            episodes = mem2.search_episodes(query, limit=5)
+            if not episodes:
+                warn("no matching episodes")
+                return
+            console.print(f"\n[bold cyan]Episodes matching '{query}'[/bold cyan]")
+            for ep in episodes:
+                info(f"  [{ep.get('event_type', '?')}] {ep.get('summary', '')[:120]}")
+            console.print()
+            return
+
+        warn("usage: episodes | episodes list | episodes search <query>")
+
+    def _procedures(self, arg: str) -> None:
+        """View procedural memories."""
+        from ultra.core.memory2 import MemoryV2
+        from ultra.core.vectors import VectorStore
+        db = self.config.data_dir / "memory" / "memory.db"
+        vec_db = self.config.data_dir / "memory" / "vectors.db"
+        vectors = VectorStore(vec_db)
+        mem2 = MemoryV2(db, vectors)
+
+        if not arg or arg == "list":
+            procs = mem2.list_procedures(limit=10)
+            if not procs:
+                warn("no procedures recorded yet")
+                info("Procedures are learned automatically from successful tasks")
+                return
+            console.print("\n[bold cyan]Known Procedures[/bold cyan]")
+            for p in procs:
+                conf = p.get("confidence", 0)
+                color = "green" if conf > 0.7 else "yellow" if conf > 0.4 else "dim"
+                total = p["success_count"] + p["fail_count"]
+                console.print(
+                    f"  [{color}]{p['name']}[/{color}] "
+                    f"confidence: {conf:.0%}  "
+                    f"success: {p['success_count']}/{total}  "
+                    f"{p['description'][:60]}")
+            console.print()
+            return
+
+        if arg.startswith("search "):
+            query = arg[7:].strip()
+            procs = mem2.search_procedures(query, limit=5)
+            if not procs:
+                warn("no matching procedures")
+                return
+            console.print(f"\n[bold cyan]Procedures matching '{query}'[/bold cyan]")
+            for p in procs:
+                info(f"  {p.name}: {p.description[:80]} (confidence: {p.confidence:.0%})")
+            console.print()
+            return
+
+        warn("usage: procedures | procedures list | procedures search <query>")
 
     def _api(self, port: str) -> None:
         try:

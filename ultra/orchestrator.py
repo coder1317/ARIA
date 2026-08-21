@@ -30,6 +30,7 @@ from ultra.agents.trainer import TrainerAgent
 from ultra.audit import AuditLog
 from ultra.config import Config
 from ultra.core.memory import Memory
+from ultra.core.memory2 import MemoryV2, Episode, Procedure
 from ultra.core.skills import SkillManager
 from ultra.core.vectors import VectorStore
 from ultra.display import info, ok, step, warn
@@ -82,6 +83,11 @@ class Orchestrator:
         self.memory = memory
         self.vectors = vectors
         self.skills = skills
+        # Phase 2: enhanced memory with episodic, procedural, user model
+        try:
+            self.memory2 = MemoryV2(memory.db_path, vectors)
+        except Exception:
+            self.memory2 = None  # graceful fallback
         self.terminal = terminal
         self.security = security or Security(config.security_enabled)
         self.audit = audit
@@ -178,6 +184,19 @@ class Orchestrator:
                 )
             except Exception:
                 pass
+            # Phase 2: record error episode
+            if self.memory2:
+                try:
+                    self.memory2.record_episode(Episode(
+                        event_type="error",
+                        summary=f"{intent} failed: {str(e)[:200]}",
+                        detail=f"Input: {text[:200]}",
+                        outcome="failure",
+                        importance=0.8,
+                        tags=[intent, "error"],
+                    ))
+                except Exception:
+                    pass
         duration = time.time() - start
         self.report.record(success, duration)
         self.memory.log_interaction(text, intent, success, duration * 1000)
@@ -191,6 +210,19 @@ class Orchestrator:
         path = self.research.save(report)
         ok(f"report saved: {path}")
         self.vectors.add("research", topic, self.client)
+        # Phase 2: record research episode
+        if self.memory2:
+            try:
+                self.memory2.record_episode(Episode(
+                    event_type="research",
+                    summary=f"Researched: {topic[:150]}",
+                    detail=f"Mode: {mode}, sources: {len(report.sources) if hasattr(report, 'sources') else '?'}",
+                    outcome="success",
+                    importance=0.5,
+                    tags=["research", mode],
+                ))
+            except Exception:
+                pass
         return report.markdown
 
     def _market(self, topic: str) -> str:
@@ -214,12 +246,39 @@ class Orchestrator:
                            else "below threshold")
         if eval_result.passed:
             self.build_circuit.record_success()
+            # Phase 2: record successful build as episode
+            if self.memory2:
+                try:
+                    self.memory2.record_episode(Episode(
+                        event_type="task_completed",
+                        summary=f"Built: {description[:100]}",
+                        detail=f"Score: {eval_result.summary()}",
+                        project=str(path),
+                        outcome="success",
+                        importance=0.6,
+                        tags=["build", "engineering"],
+                    ))
+                except Exception:
+                    pass
             if self.config.auto_extract_skills:
                 try:
                     self.trainer.extract_skill(path, description)
                 except Exception as e:
                     warn(f"skill extraction failed: {e}")
         else:
+            # Phase 2: record failed build
+            if self.memory2:
+                try:
+                    self.memory2.record_episode(Episode(
+                        event_type="task_completed",
+                        summary=f"Build failed: {description[:100]}",
+                        detail=eval_result.summary(),
+                        outcome="failure",
+                        importance=0.7,
+                        tags=["build", "failure"],
+                    ))
+                except Exception:
+                    pass
             tripped = self.build_circuit.record_failure()
             if tripped:
                 warn(f"build circuit opened after {self.build_circuit.max_failures} "
@@ -269,6 +328,18 @@ class Orchestrator:
         self.memory.add_message("user", text)
         self.memory.add_message("assistant", response)
         self.vectors.add("chat", text, self.client)
+        # Phase 2: record episode for significant conversations
+        if self.memory2 and len(text) > 10:
+            try:
+                self.memory2.record_episode(Episode(
+                    event_type="conversation",
+                    summary=text[:200],
+                    detail=response[:500],
+                    importance=0.3,
+                    tags=["chat"],
+                ))
+            except Exception:
+                pass
         if self.audit:
             self.audit.log(actor="brain", action="chat", task_type="chat",
                            provider=None, detail={"len": len(response)})
@@ -393,6 +464,14 @@ class Orchestrator:
     # ── helpers ─────────────────────────────────────────────────────
 
     def _memory_context(self) -> str:
+        """Build memory context for chat — episodic, procedural, user model, facts."""
+        # Phase 2: full memory retrieval
+        if self.memory2:
+            try:
+                return self.memory2.retrieve_context("", self.client, max_tokens=2000)
+            except Exception:
+                pass
+        # Fallback: basic facts only
         facts = self.memory.get_facts()
         if not facts:
             return ""
