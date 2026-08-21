@@ -1,3 +1,4 @@
 requests>=2.31
 rich>=13.0
 beautifulsoup4>=4.12
+ddgs

@@ -1,8 +1,8 @@
-"""Web research without API keys — multi-engine fallback.
+"""Web research without API keys — DuckDuckGo primary, Bing fallback.
 
-DuckDuckGo's HTML endpoint frequently serves an anti-bot "anomaly" page,
-so the primary engine is Bing HTML (works without keys), with DuckDuckGo
-as a backup. All LLM work still happens locally via Ollama.
+Uses the `ddgs` package for DuckDuckGo search (fast, reliable, no keys).
+Falls back to Bing HTML scraping if DuckDuckGo is unavailable.
+All LLM work still happens locally via Ollama.
 """
 from __future__ import annotations
 
@@ -14,6 +14,12 @@ from dataclasses import dataclass, field
 
 import requests
 from bs4 import BeautifulSoup  # type: ignore
+
+try:
+    from ddgs import DDGS
+    _HAS_DDGS = True
+except ImportError:
+    _HAS_DDGS = False
 
 from ultra.config import Config
 
@@ -175,15 +181,39 @@ class Researcher:
     # ── search ──────────────────────────────────────────────────────
 
     def search(self, query: str, limit: int | None = None) -> list[Source]:
-        """Try Bing first, then DuckDuckGo as backup. Unsafe URLs are
-        filtered out (SSRF defense). Irrelevant results (login pages,
-        shopping sites, non-English content) are also dropped."""
+        """Search using DuckDuckGo (primary) or Bing (fallback).
+
+        Unsafe URLs are filtered out (SSRF defense). Irrelevant results
+        (login pages, shopping sites, non-English content) are also dropped.
+        """
         limit = limit or self.config.research_max_sources
-        results = self._search_bing(query, limit + 3)  # fetch extra to compensate for filtering
+        # Primary: DuckDuckGo via ddgs package (fast, reliable)
+        results = self._search_ddgs(query, limit + 3)
+        # Fallback: Bing HTML scraping
         if not results:
-            results = self._search_ddg(query, limit + 3)
+            results = self._search_bing(query, limit + 3)
+        # Last resort: DuckDuckGo HTML (often blocked)
+        if not results:
+            results = self._search_ddg_html(query, limit + 3)
         filtered = [r for r in results if _safe_url(r.url) and _relevant_source(r, query)]
         return filtered[:limit]
+
+    def _search_ddgs(self, query: str, limit: int) -> list[Source]:
+        """DuckDuckGo search via the ddgs package — fast, reliable, no keys."""
+        if not _HAS_DDGS:
+            return []
+        try:
+            results = DDGS().text(query, region="wt-wt", max_results=limit)
+            sources = []
+            for r in results:
+                url = r.get("href", "")
+                title = r.get("title", "")
+                snippet = r.get("body", "")
+                if url.startswith("http"):
+                    sources.append(Source(url=url, title=title, snippet=snippet))
+            return sources
+        except Exception:
+            return []
 
     def _search_bing(self, query: str, limit: int) -> list[Source]:
         """Bing HTML — li.b_algo result blocks. No API key needed."""
@@ -214,7 +244,7 @@ class Researcher:
                                   snippet=snippet))
         return results
 
-    def _search_ddg(self, query: str, limit: int) -> list[Source]:
+    def _search_ddg_html(self, query: str, limit: int) -> list[Source]:
         """DuckDuckGo HTML — often blocked by an anomaly page; kept as backup."""
         params = {"q": query, "kl": "us-en"}
         try:
