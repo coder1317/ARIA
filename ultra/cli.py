@@ -110,8 +110,11 @@ class AriaCLI:
             return
         ok("Ollama connected")
         models = self.client.available_models()
+        # Check models considering Ollama's :latest suffix
+        def _model_available(name: str) -> bool:
+            return name in models or f"{name}:latest" in models
         missing = [m for m in (self.config.chat_model, self.config.fallback_model)
-                   if m not in models]
+                   if not _model_available(m)]
         if missing:
             warn("Models not pulled yet:")
             for m in missing:
@@ -539,7 +542,8 @@ class AriaCLI:
             info("Example: model set lfm2.5:latest")
             return
         models = self.client.available_models()
-        if name not in models:
+        # Accept both "lfm2.5" and "lfm2.5:latest"
+        if name not in models and f"{name}:latest" not in models:
             warn(f"'{name}' not pulled. Available: {', '.join(models)}")
             info(f"Pull it first: ollama pull {name}")
             return

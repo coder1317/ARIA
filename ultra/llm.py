@@ -41,12 +41,15 @@ class OllamaClient:
             except OllamaError:
                 self._available_cache = []
         available = self._available_cache
-        if not available or model in available:
+        # Ollama may list "lfm2.5" as "lfm2.5:latest" — check both
+        def _has(name: str) -> bool:
+            return name in available or f"{name}:latest" in available
+        if not available or _has(model):
             return model
         for candidate in (self.config.fallback_model,
                           self.config.chat_model,
                           self.config.coding_model):
-            if candidate in available:
+            if _has(candidate):
                 return candidate
         return model
 
@@ -74,6 +77,16 @@ class OllamaClient:
         if resp.status_code != 200:
             raise OllamaError(f"Ollama error {resp.status_code}: {resp.text[:300]}")
         return resp.json()
+
+    @staticmethod
+    def _strip_thinking(text: str) -> str:
+        """Remove <think>...</think> reasoning tags from model output.
+
+        Models like lfm2.5 wrap chain-of-thought reasoning in thinking tags.
+        We strip them so downstream code sees only the actual response.
+        """
+        import re
+        return re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL).strip()
 
     def _get(self, path: str, timeout: int | None = None) -> dict:
         """GET request — /api/tags only accepts GET/HEAD, not POST."""
@@ -152,7 +165,7 @@ class OllamaClient:
         if format:
             payload["format"] = format
         data = self._post("/api/generate", payload)
-        return data.get("response", "")
+        return self._strip_thinking(data.get("response", ""))
 
     def stream(
         self,
@@ -174,10 +187,21 @@ class OllamaClient:
         }
         if system:
             payload["system"] = system
+        in_thinking = False
         for chunk in self._stream("/api/generate", payload):
             token = chunk.get("response", "")
-            if token:
-                yield token
+            if not token:
+                continue
+            # Strip <think> blocks during streaming
+            if "<think>" in token:
+                in_thinking = True
+                token = token.split("<think>", 1)[0]
+            if "</think>" in token:
+                in_thinking = False
+                token = token.split("</think>", 1)[1]
+            if in_thinking or not token.strip():
+                continue
+            yield token
 
     def chat(self, messages: list[dict], model: str | None = None, **opts) -> str:
         """Chat-style completion using the /api/chat endpoint."""
@@ -191,7 +215,7 @@ class OllamaClient:
         if opts.get("format"):
             payload["format"] = opts["format"]
         data = self._post("/api/chat", payload)
-        return data.get("message", {}).get("content", "")
+        return self._strip_thinking(data.get("message", {}).get("content", ""))
 
     def json(self, prompt: str, system: str | None = None, model: str | None = None,
              max_tokens: int = 2048, temperature: float = 0.0) -> dict | None:
