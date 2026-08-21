@@ -101,9 +101,19 @@ Examples:
 Return JSON: {{"intent": "category"}}"""
 
 
-def llm_route(client: OllamaClient, text: str) -> str:
-    """LLM-based intent classification (fallback when keywords are ambiguous)."""
-    result = client.json(_CLASSIFY_PROMPT.format(request=text[:500]))
+def llm_route(client, text: str) -> str:
+    """LLM-based intent classification (fallback when keywords are ambiguous).
+
+    Uses the chat model (primary) instead of the fallback model for
+    more accurate classification.
+    """
+    # Use the primary chat model for better classification
+    try:
+        model = getattr(client.config, 'chat_model', None) if hasattr(client, 'config') else None
+        result = client.json(_CLASSIFY_PROMPT.format(request=text[:500]),
+                            model=model, task_type="routing")
+    except Exception:
+        result = client.json(_CLASSIFY_PROMPT.format(request=text[:500]))
     intent = (result or {}).get("intent", "chat")
     return intent if intent in INTENTS else "chat"
 

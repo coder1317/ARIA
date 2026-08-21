@@ -52,12 +52,24 @@ def make_app(orch, config: Config) -> FastAPI:
 
     def _fail(request_id: str, exc: Exception) -> dict:
         """Redact internal details — full trace goes to the audit log."""
+        # Log full error internally
         if orch.audit:
             orch.audit.log(actor="api", action="error",
                            detail={"request_id": request_id,
                                    "error": f"{type(exc).__name__}: {exc}"})
+        # P2-12: Never expose file paths, provider details, or stack traces
+        import re as _re
+        safe_msg = str(exc)
+        # Remove file paths
+        safe_msg = _re.sub(r"(/[\w./-]+)", "[path]", safe_msg)
+        # Remove provider URLs
+        safe_msg = _re.sub(r"https?://[^\s]+", "[url]", safe_msg)
+        # Remove stack traces
+        safe_msg = _re.sub(r"Traceback.*", "", safe_msg, flags=_re.DOTALL)
+        # Cap length
+        safe_msg = safe_msg[:200] if safe_msg else "unknown error"
         return {"success": False, "error": "internal error",
-                "request_id": request_id}
+                "request_id": request_id, "hint": safe_msg}
 
     @app.post("/process", dependencies=[auth] if auth else [])
     def process(req: ProcessRequest):

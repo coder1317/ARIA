@@ -98,10 +98,13 @@ class AriaCLI:
         self.tasks = TaskManager(config.data_dir / "memory" / "tasks.db",
                                  max_concurrent=config.max_concurrent_tasks,
                                  default_timeout=config.task_timeout_sec)
+        # Phase 2: create MemoryV2 at CLI level for sharing
+        from ultra.core.memory2 import MemoryV2
+        self.memory2 = MemoryV2(config.data_dir / "memory" / "memory.db", self.vectors)
         self.orch = Orchestrator(self.client, config, self.memory,
                                  self.vectors, self.skills, self.terminal,
                                  security=self.security, audit=self.audit,
-                                 tasks=self.tasks)
+                                 tasks=self.tasks, memory2=self.memory2)
         self.work_mode = None  # None=auto, 'research', 'build', 'orchestrate'
         self.last_report = ""
 
@@ -116,6 +119,19 @@ class AriaCLI:
                  f"ollama pull {self.config.fallback_model}")
             return
         ok("Ollama connected")
+        # P1-5: Cloud model health check on startup
+        if "cloud" in self.config.chat_model.lower():
+            try:
+                import time as _time
+                t0 = _time.time()
+                self.client.generate("ping", max_tokens=4, task_type="chat")
+                latency = _time.time() - t0
+                if latency > 10:
+                    warn(f"Cloud model slow ({latency:.0f}s) — local fallback available")
+                else:
+                    ok(f"Cloud model healthy ({latency:.1f}s)")
+            except Exception:
+                warn("Cloud model unreachable — will use local fallback")
         models = self.client.available_models()
         # Check models considering Ollama's :latest suffix
         def _model_available(name: str) -> bool:

@@ -38,6 +38,30 @@ TASK_CAPABILITY = {
 
 CIRCUIT_OPEN_SECONDS = 60.0
 CONSECUTIVE_FAILURES_TO_OPEN = 3
+MAX_RETRIES = 2  # retry transient failures before failover
+RETRY_BACKOFF = [0.5, 1.5]  # seconds between retries
+
+
+class _RateLimiter:
+    """Simple sliding-window rate limiter per provider."""
+
+    def __init__(self, rpm: int = 60):
+        self.rpm = rpm
+        self._window: list[float] = []
+
+    def acquire(self) -> float:
+        """Wait if necessary; returns wait time in seconds."""
+        now = time.time()
+        # Remove timestamps older than 60s
+        self._window = [t for t in self._window if now - t < 60.0]
+        if len(self._window) >= self.rpm:
+            # Must wait until the oldest call falls out of the window
+            wait = 60.0 - (now - self._window[0]) + 0.1
+            time.sleep(wait)
+            now = time.time()
+            self._window = [t for t in self._window if now - t < 60.0]
+        self._window.append(now)
+        return 0.0
 
 
 class ProviderHealth(Enum):
@@ -97,6 +121,7 @@ class ProviderPool:
         self.specs: dict[str, ProviderSpec] = {}
         self.stats: dict[str, ProviderStats] = {}
         self.circuit_open_until: dict[str, float] = {}
+        self._rate_limiters: dict[str, _RateLimiter] = {}  # P1-7
         self._ollama: OllamaClient | None = None
         self._build_providers()
         self._available_cache: list[str] | None = None
@@ -131,6 +156,7 @@ class ProviderPool:
             self.providers[spec.name] = client
             self.specs[spec.name] = spec
             self.stats[spec.name] = ProviderStats()
+            self._rate_limiters[spec.name] = _RateLimiter(rpm=spec.rpm)
 
     # ── routing ─────────────────────────────────────────────────────
 
@@ -201,17 +227,25 @@ class ProviderPool:
             spec = self.specs[name]
             client = self.providers[name]
             attempted.append(name)
-            try:
-                start = time.time()
-                text = client.chat(msgs, model=spec.model, **opts)
-                self.stats[name].record_success((time.time() - start) * 1000)
-                return text
-            except Exception as e:
-                last_error = f"{name}: {e}"
-                self.stats[name].record_failure(str(e))
-                if self.stats[name].health == ProviderHealth.UNHEALTHY:
-                    self.circuit_open_until[name] = time.time() + CIRCUIT_OPEN_SECONDS
-                    self.stats[name].health = ProviderHealth.CIRCUIT_OPEN
+            # P1-7: Rate limit
+            limiter = self._rate_limiters.get(name)
+            if limiter:
+                limiter.acquire()
+            # P1-9: Retry with backoff
+            for retry in range(MAX_RETRIES + 1):
+                try:
+                    start = time.time()
+                    text = client.chat(msgs, model=spec.model, **opts)
+                    self.stats[name].record_success((time.time() - start) * 1000)
+                    return text
+                except Exception as e:
+                    last_error = f"{name}: {e}"
+                    if retry < MAX_RETRIES:
+                        time.sleep(RETRY_BACKOFF[min(retry, len(RETRY_BACKOFF) - 1)])
+            self.stats[name].record_failure(str(last_error))
+            if self.stats[name].health == ProviderHealth.UNHEALTHY:
+                self.circuit_open_until[name] = time.time() + CIRCUIT_OPEN_SECONDS
+                self.stats[name].health = ProviderHealth.CIRCUIT_OPEN
         raise ProviderExhaustedError(
             f"All providers failed for chat. Attempted: {attempted}. "
             f"Last error: {last_error}"
@@ -241,29 +275,42 @@ class ProviderPool:
                 model: str | None = None, max_tokens: int = 4096,
                 temperature: float = 0.7, format: str | None = None,
                 timeout: int = 300) -> tuple[str, str]:
-        """Run a call, failing over across providers. Returns (text, provider)."""
+        """Run a call with retry + rate limiting, failing over across providers.
+
+        Returns (text, provider). Each provider gets up to MAX_RETRIES attempts
+        before failing over to the next candidate.
+        """
         attempted: list[str] = []
         last_error: str | None = None
         for name in self._candidates(task_type, model):
             spec = self.specs[name]
             client = self.providers[name]
             attempted.append(name)
-            try:
-                start = time.time()
-                text = client.generate(
-                    prompt, system=system, model=spec.model,
-                    max_tokens=max_tokens, temperature=temperature,
-                    format=format,
-                )
-                latency_ms = (time.time() - start) * 1000
-                self.stats[name].record_success(latency_ms)
-                return text, name
-            except Exception as e:  # provider-level failure → fail over
-                last_error = f"{name}: {e}"
-                self.stats[name].record_failure(str(e))
-                if self.stats[name].health == ProviderHealth.UNHEALTHY:
-                    self.circuit_open_until[name] = time.time() + CIRCUIT_OPEN_SECONDS
-                    self.stats[name].health = ProviderHealth.CIRCUIT_OPEN
+            # P1-7: Rate limit before calling
+            limiter = self._rate_limiters.get(name)
+            if limiter:
+                limiter.acquire()
+            # P1-9: Retry with backoff per provider
+            for retry in range(MAX_RETRIES + 1):
+                try:
+                    start = time.time()
+                    text = client.generate(
+                        prompt, system=system, model=spec.model,
+                        max_tokens=max_tokens, temperature=temperature,
+                        format=format,
+                    )
+                    latency_ms = (time.time() - start) * 1000
+                    self.stats[name].record_success(latency_ms)
+                    return text, name
+                except Exception as e:
+                    last_error = f"{name}: {e}"
+                    if retry < MAX_RETRIES:
+                        time.sleep(RETRY_BACKOFF[min(retry, len(RETRY_BACKOFF) - 1)])
+            # All retries exhausted for this provider
+            self.stats[name].record_failure(str(last_error))
+            if self.stats[name].health == ProviderHealth.UNHEALTHY:
+                self.circuit_open_until[name] = time.time() + CIRCUIT_OPEN_SECONDS
+                self.stats[name].health = ProviderHealth.CIRCUIT_OPEN
         raise ProviderExhaustedError(
             f"All providers failed for task_type={task_type} (model={model}). "
             f"Attempted: {attempted}. Last error: {last_error}"

@@ -93,12 +93,36 @@ class ResearchReport:
     markdown: str
     sources: list[Source] = field(default_factory=list)
     saved_to: str = ""
+    confidence: float = 0.0  # P3-16: overall confidence score (0-1)
+    source_freshness: str = ""  # P2-15: freshness assessment
 
     @property
     def citation_lines(self) -> str:
         return "\n".join(
             f"{i}. {s.title} — {s.url}" for i, s in enumerate(self.sources, 1)
         )
+
+    def freshness_summary(self) -> str:
+        """P2-15: Assess source freshness based on URL patterns."""
+        if not self.sources:
+            return "No sources available"
+        fresh = 0
+        total = len(self.sources)
+        for s in self.sources:
+            url = s.url.lower()
+            # Docs, GitHub, official sites are considered fresh
+            if any(d in url for d in ("docs.", "github.com", "official", ".edu", ".gov")):
+                fresh += 1
+            # StackOverflow, blogs are less fresh
+            elif any(d in url for d in ("stackoverflow", "medium.com", "dev.to")):
+                fresh += 0.5
+        ratio = fresh / total if total else 0
+        if ratio > 0.7:
+            return f"High freshness ({fresh:.0f}/{total} authoritative sources)"
+        elif ratio > 0.4:
+            return f"Moderate freshness ({fresh:.0f}/{total} authoritative sources)"
+        else:
+            return f"Low freshness ({fresh:.0f}/{total} authoritative sources)"
 
 
 class ResearchAgent:
@@ -150,8 +174,23 @@ No external sources are available. Write the report from your own knowledge."""
             markdown = self.client.generate(prompt, system=SYSTEM_NO_SOURCES,
                                             max_tokens=4096, temperature=0.4)
         markdown = sanitize_citations(markdown, len(enriched))
+        # P3-16: Compute confidence score
+        confidence = 0.5  # base confidence
+        if enriched:
+            confidence += 0.1 * min(len(enriched), 4)  # more sources = more confidence
+            if any(s.content for s in enriched):
+                confidence += 0.15  # fetched content boosts confidence
+        if "no external sources" in markdown.lower():
+            confidence = 0.2  # low confidence for model-only reports
+        confidence = min(confidence, 1.0)
+        # P2-15: Assess source freshness
+        freshness = ""
+        if enriched:
+            report_tmp = ResearchReport(topic=topic, mode=mode, markdown="", sources=enriched)
+            freshness = report_tmp.freshness_summary()
         return ResearchReport(topic=topic, mode=mode, markdown=markdown,
-                              sources=enriched)
+                              sources=enriched, confidence=confidence,
+                              source_freshness=freshness)
 
     def save(self, report: ResearchReport, out_dir: Path | None = None) -> str:
         out_dir = out_dir or (self.config.projects_dir / "research")
