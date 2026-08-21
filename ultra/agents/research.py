@@ -110,7 +110,7 @@ class ResearchAgent:
     def run(self, topic: str, mode: str = "deep") -> ResearchReport:
         mode = mode if mode in RESEARCH_MODES else "deep"
         step(1, f"Searching ({mode})")
-        sources = self.researcher.deep_search(topic)
+        sources = self.researcher.deep_search(topic, llm=self.client)
         if not sources:
             warn("no web results — building report from model knowledge only")
         else:
