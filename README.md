@@ -226,6 +226,55 @@ Available tools: `terminal.execute`, `filesystem.read/write/list/search`,
 `memory.search/remember`, `web.search/fetch`, `skills.list/get/search`,
 `model.list/health`, plus any MCP tools.
 
+## Memory Intelligence (Phase 2)
+
+ARIA has three types of memory beyond basic conversation storage:
+
+### Episodic Memory — "What happened?"
+
+Every significant event is recorded: builds completed, research done,
+decisions made, errors encountered. ARIA can search its own history
+semantically and recall relevant past experiences.
+
+```
+ARIA > episodes                           # recent episodic memories
+ARIA > episodes search "flask build"      # search past events
+```
+
+### Procedural Memory — "How do I do this?"
+
+Successful workflows are recorded as procedures with step sequences,
+tool usage, success rates, and confidence scores. Procedures that
+work well get higher confidence; ones that fail get flagged.
+
+```
+ARIA > procedures                         # known procedures
+ARIA > procedures search "embedded"      # search by topic
+```
+
+### User Model — "Who is Hari?"
+
+ARIA maintains a structured profile: your name, preferences, hardware,
+skills, goals, and custom facts. This is injected into every chat
+prompt so ARIA always knows your context.
+
+```
+ARIA > profile                            # show user profile
+ARIA > profile set preferred_language C++ # update a field
+ARIA > profile goal Build AGRI-GLIDE      # add an active goal
+```
+
+### Context Retrieval
+
+Before every chat response, ARIA automatically retrieves:
+- Your user profile (preferences, goals, hardware)
+- Relevant episodic memories (past events matching your query)
+- Known procedures (how to accomplish similar tasks)
+- Recent projects and facts
+- Lessons learned from past failures
+
+This means ARIA remembers your history without you re-explaining context.
+
 ## Architecture
 
 ```
@@ -248,7 +297,9 @@ ultra/
 ├── tools/            safe bash, diff editor, web researcher, browser, MCP
 │   ├── browser.py    Playwright headless browser
 │   └── mcp_client.py Model Context Protocol client
-└── core/             memory (SQLite+FTS5), vectors (embeddings), skills (SKILL.md)
+└── core/             memory (SQLite+FTS5), memory2 (episodic/procedural/user model),
+                      vectors (embeddings), skills (SKILL.md),
+                      tool_registry + runtime (PLAN→ACT→OBSERVE→EVALUATE)
 ```
 
 **Provider pool routing** — tasks are routed by capability: code tasks → coding model, chat/research → chat model, anything failing falls over to the next provider in priority order. A provider that fails 3× consecutively is circuit-open for 60s. Configure a cloud provider by setting `ULTRA_CLOUD_BASE_URL`, `ULTRA_CLOUD_API_KEY`, `ULTRA_CLOUD_MODEL` in `.env`.
