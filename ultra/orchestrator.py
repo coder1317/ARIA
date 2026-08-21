@@ -29,10 +29,14 @@ from ultra.agents.research import ResearchAgent
 from ultra.agents.trainer import TrainerAgent
 from ultra.audit import AuditLog
 from ultra.config import Config
+from ultra.core.events import EventBus, EventType
+from ultra.core.goals import GoalManager
 from ultra.core.memory import Memory
 from ultra.core.memory2 import MemoryV2, Episode, Procedure
+from ultra.core.notifications import NotificationManager
 from ultra.core.skills import SkillManager
 from ultra.core.vectors import VectorStore
+from ultra.core.watchers import FileWatcher
 from ultra.display import info, ok, step, warn
 from ultra.evaluator import CircuitBreaker, Evaluator
 from ultra.intent import detect, extract_problem
@@ -107,6 +111,19 @@ class Orchestrator:
         self.evaluator = Evaluator(self.security)
         self.build_circuit = CircuitBreaker("build", max_failures=3)
 
+        # Phase 3: EventBus + Watchers + Notifications + Goals
+        self.event_bus = EventBus()
+        self.watcher = FileWatcher(self.event_bus)
+        self.notify = NotificationManager(
+            log_path=config.data_dir / "memory" / "notifications.log")
+        self.notify.subscribe_event_bus(self.event_bus)
+        self.goals = GoalManager(config.data_dir / "memory" / "goals.db")
+        # Auto-watch the projects directory
+        if config.projects_dir.exists():
+            self.watcher.watch(config.projects_dir)
+        # Emit startup event
+        self.event_bus.system_startup()
+
         # agent registry (spec §6: Brain.agents)
         self.agents: dict[str, Agent] = {
             "research": Agent("research", "research", self.research.run, audit),
@@ -155,6 +172,8 @@ class Orchestrator:
 
         intent = detect(self.client, text)
         problem = extract_problem(text)
+        # Emit user message event
+        self.event_bus.emit(EventType.USER_MESSAGE, {"text": text[:300], "intent": intent}, source="cli")
         if self.audit:
             detail = {"input": text[:300]}
             if context:
@@ -204,6 +223,13 @@ class Orchestrator:
         duration = time.time() - start
         self.report.record(success, duration)
         self.memory.log_interaction(text, intent, success, duration * 1000)
+        # Emit completion/failure event
+        if success:
+            self.event_bus.emit(EventType.TASK_COMPLETED,
+                              {"intent": intent, "duration": duration}, source="brain")
+        else:
+            self.event_bus.emit(EventType.TASK_FAILED,
+                              {"intent": intent, "error": outcome[:200]}, source="brain")
         return outcome
 
     # ── pipelines ───────────────────────────────────────────────────
@@ -214,6 +240,12 @@ class Orchestrator:
         path = self.research.save(report)
         ok(f"report saved: {path}")
         self.vectors.add("research", topic, self.client)
+        # Emit research event
+        self.event_bus.research_completed(
+            topic=topic,
+            sources=len(report.sources) if hasattr(report, 'sources') else 0,
+            confidence=report.confidence if hasattr(report, 'confidence') else 0,
+        )
         # Phase 2: record research episode
         if self.memory2:
             try:
@@ -249,10 +281,12 @@ class Orchestrator:
         if self.build_circuit.is_open:
             return (f"Build circuit is cooling down after repeated failures "
                     f"({self.build_circuit.remaining()}s) — try again shortly.")
+        self.event_bus.build_started(description)
         path = self.engineering.build(description, report=self)
         # evaluator: score the result for the audit trail
         eval_result = self.evaluator.evaluate_project(path)
         info(f"evaluator: {eval_result.summary()}")
+        self.event_bus.build_completed(str(path), eval_result.score)
         if self.audit:
             self.audit.log(actor="brain", action="build_evaluated",
                            detail=eval_result.summary(), error=None if eval_result.passed
