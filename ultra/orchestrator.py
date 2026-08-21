@@ -77,17 +77,21 @@ class Orchestrator:
                  skills: SkillManager, terminal: Terminal,
                  security: Security | None = None,
                  audit: AuditLog | None = None,
-                 tasks: TaskManager | None = None):
+                 tasks: TaskManager | None = None,
+                 memory2: MemoryV2 | None = None):
         self.client = client
         self.config = config
         self.memory = memory
         self.vectors = vectors
         self.skills = skills
-        # Phase 2: enhanced memory with episodic, procedural, user model
-        try:
-            self.memory2 = MemoryV2(memory.db_path, vectors)
-        except Exception:
-            self.memory2 = None  # graceful fallback
+        # Phase 2: accept pre-built MemoryV2 or create one
+        if memory2 is not None:
+            self.memory2 = memory2
+        else:
+            try:
+                self.memory2 = MemoryV2(memory.db_path, vectors)
+            except Exception:
+                self.memory2 = None  # graceful fallback
         self.terminal = terminal
         self.security = security or Security(config.security_enabled)
         self.audit = audit
@@ -223,6 +227,15 @@ class Orchestrator:
                 ))
             except Exception:
                 pass
+        # Add confidence and freshness metadata to output
+        meta = []
+        if report.confidence > 0:
+            conf_label = "high" if report.confidence > 0.7 else "medium" if report.confidence > 0.4 else "low"
+            meta.append(f"Confidence: {conf_label} ({report.confidence:.0%})")
+        if report.source_freshness:
+            meta.append(report.source_freshness)
+        if meta:
+            return report.markdown + "\n\n---\n*" + " · ".join(meta) + "*"
         return report.markdown
 
     def _market(self, topic: str) -> str:
@@ -318,7 +331,7 @@ class Orchestrator:
         return f"Deployment config generated for {platform} in {target}"
 
     def _chat(self, text: str) -> str:
-        system = IDENTITY + "\n\n" + self._memory_context()
+        system = IDENTITY + "\n\n" + self._memory_context(text)
         if self.skills.context(text):
             system += "\n\n" + self.skills.context(text)
         messages = self.memory.thread(self.config.context_window) + [
@@ -463,12 +476,12 @@ class Orchestrator:
 
     # ── helpers ─────────────────────────────────────────────────────
 
-    def _memory_context(self) -> str:
+    def _memory_context(self, query: str = "") -> str:
         """Build memory context for chat — episodic, procedural, user model, facts."""
-        # Phase 2: full memory retrieval
+        # Phase 2: full memory retrieval with actual query
         if self.memory2:
             try:
-                return self.memory2.retrieve_context("", self.client, max_tokens=2000)
+                return self.memory2.retrieve_context(query, self.client, max_tokens=2000)
             except Exception:
                 pass
         # Fallback: basic facts only

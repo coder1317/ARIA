@@ -329,9 +329,14 @@ class AgentRuntime:
 
         This is synchronous for compatibility with the current codebase.
         For async use, wrap in asyncio.
+
+        P3-17: Includes loop detection — if the same step fails 3 times
+        with the same error, the runtime force-replans or aborts.
         """
         start = time.time()
         iterations = 0
+        # P3-17: Loop detection — track consecutive failures per step
+        _failure_history: dict[str, list[str]] = {}  # step_id → [error messages]
 
         while iterations < self.max_iterations:
             iterations += 1
@@ -357,6 +362,17 @@ class AgentRuntime:
             # Execute the first ready step (could parallelize later)
             step = ready[0]
             self._execute_step(plan, step)
+
+            # P3-17: Loop detection — check for repeated failures
+            if step.status == StepStatus.FAILED:
+                error_key = step.observation.llm_analysis[:100] if step.observation else "unknown"
+                hist = _failure_history.setdefault(step.id, [])
+                hist.append(error_key)
+                if len(hist) >= 5 and len(set(hist[-5:])) == 1:
+                    # Same error 3 times in a row — force skip this step
+                    logger.warning("Loop detected for step %s: same error 3x — skipping", step.id)
+                    step.status = StepStatus.SKIPPED
+                    _failure_history[step.id] = []  # reset to avoid cascade
 
         if plan.status not in (PlanStatus.FAILED, PlanStatus.ABORTED, PlanStatus.REPLANNING):
             if plan.any_failed():

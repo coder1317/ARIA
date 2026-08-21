@@ -118,9 +118,43 @@ class Evaluator:
                 checks["smoke"] = {"ok": smoke >= 0.8, "score": smoke,
                                     "detail": detail}
 
-        # weights: runtime is the strongest signal that "built" is real
-        score = (0.15 * completeness + 0.25 * correctness
-                 + 0.35 * smoke + 0.25 * safety)
+        # P1-10: Multi-dimensional evaluation
+        # requirements — does it have README, requirements.txt/pyproject.toml?
+        has_readme = any(f.name.lower() == "readme.md" for f in project_dir.iterdir())
+        has_deps = any(f.name in ("requirements.txt", "pyproject.toml", "setup.py")
+                       for f in project_dir.iterdir())
+        has_tests = any("test" in f.name.lower() and f.suffix == ".py"
+                        for f in project_dir.rglob("*.py"))
+        requirements = (
+            (0.4 if has_readme else 0.0) +
+            (0.3 if has_deps else 0.0) +
+            (0.3 if has_tests else 0.0)
+        )
+        checks["requirements"] = {
+            "ok": requirements >= 0.4,
+            "score": requirements,
+            "detail": f"readme={'yes' if has_readme else 'no'} deps={'yes' if has_deps else 'no'} tests={'yes' if has_tests else 'no'}"
+        }
+
+        # code quality — average file size (substantial != trivial)
+        sizes = []
+        for f in py_files:
+            try:
+                sizes.append(len(f.read_text(encoding="utf-8", errors="ignore")))
+            except OSError:
+                pass
+        avg_size = sum(sizes) / len(sizes) if sizes else 0
+        quality = min(1.0, avg_size / 200)  # 200+ chars avg = full score
+        checks["quality"] = {
+            "ok": quality >= 0.3,
+            "score": quality,
+            "detail": f"avg file size: {avg_size:.0f} chars"
+        }
+
+        # weighted scoring: runtime is strongest, then correctness, safety, completeness
+        score = (0.10 * completeness + 0.20 * correctness
+                 + 0.30 * smoke + 0.20 * safety
+                 + 0.10 * requirements + 0.10 * quality)
         return EvalResult(score=score, passed=score >= self.threshold, checks=checks)
 
 

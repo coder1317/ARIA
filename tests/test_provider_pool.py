@@ -39,9 +39,10 @@ def _pool_with(clients: dict[str, FakeClient], specs: list[ProviderSpec]) -> Pro
     pool.config = Config()
     pool.providers = clients
     pool.specs = {s.name: s for s in specs}
-    from ultra.provider_pool import ProviderStats
+    from ultra.provider_pool import ProviderStats, _RateLimiter
     pool.stats = {s.name: ProviderStats() for s in specs}
     pool.circuit_open_until = {}
+    pool._rate_limiters = {s.name: _RateLimiter(rpm=999) for s in specs}
     pool._ollama = None
     pool._available_cache = None
     return pool

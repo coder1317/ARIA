@@ -149,23 +149,40 @@ class OllamaClient:
         max_tokens: int = 4096,
         temperature: float = 0.7,
         format: str | None = None,  # "json" to force JSON output
+        _retries: int = 2,
     ) -> str:
-        """Non-streaming completion, returns the full text."""
-        payload: dict[str, Any] = {
-            "model": self._resolve(model),
-            "prompt": prompt,
-            "stream": False,
-            "options": {
-                "num_predict": max_tokens,
-                "temperature": temperature,
-            },
-        }
-        if system:
-            payload["system"] = system
-        if format:
-            payload["format"] = format
-        data = self._post("/api/generate", payload)
-        return self._strip_thinking(data.get("response", ""))
+        """Non-streaming completion, returns the full text.
+
+        Retries up to _retries times on empty responses to handle
+        intermittent cloud model failures.
+        """
+        import time as _time
+        last_error: str | None = None
+        for attempt in range(_retries + 1):
+            payload: dict[str, Any] = {
+                "model": self._resolve(model),
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "num_predict": max_tokens,
+                    "temperature": temperature,
+                },
+            }
+            if system:
+                payload["system"] = system
+            if format:
+                payload["format"] = format
+            data = self._post("/api/generate", payload)
+            text = self._strip_thinking(data.get("response", ""))
+            if text.strip():
+                return text
+            last_error = "empty response"
+            if attempt < _retries:
+                _time.sleep(1.0 * (attempt + 1))  # backoff
+        raise OllamaError(
+            f"Model returned empty responses after {_retries + 1} attempts. "
+            "The model may be overloaded or the prompt may need revision."
+        )
 
     def stream(
         self,
@@ -204,18 +221,32 @@ class OllamaClient:
             yield token
 
     def chat(self, messages: list[dict], model: str | None = None, **opts) -> str:
-        """Chat-style completion using the /api/chat endpoint."""
-        payload: dict[str, Any] = {
-            "model": self._resolve(model),
-            "messages": messages,
-            "stream": False,
-            "options": {"num_predict": opts.get("max_tokens", 4096),
-                        "temperature": opts.get("temperature", 0.7)},
-        }
-        if opts.get("format"):
-            payload["format"] = opts["format"]
-        data = self._post("/api/chat", payload)
-        return self._strip_thinking(data.get("message", {}).get("content", ""))
+        """Chat-style completion using the /api/chat endpoint.
+
+        Retries on empty responses (common with cloud models)."""
+        import time as _time
+        retries = opts.pop("_retries", 2)
+        last_error: str | None = None
+        for attempt in range(retries + 1):
+            payload: dict[str, Any] = {
+                "model": self._resolve(model),
+                "messages": messages,
+                "stream": False,
+                "options": {"num_predict": opts.get("max_tokens", 4096),
+                            "temperature": opts.get("temperature", 0.7)},
+            }
+            if opts.get("format"):
+                payload["format"] = opts["format"]
+            data = self._post("/api/chat", payload)
+            text = self._strip_thinking(data.get("message", {}).get("content", ""))
+            if text.strip():
+                return text
+            last_error = "empty response"
+            if attempt < retries:
+                _time.sleep(1.0 * (attempt + 1))
+        raise OllamaError(
+            f"Model returned empty responses after {retries + 1} attempts."
+        )
 
     def json(self, prompt: str, system: str | None = None, model: str | None = None,
              max_tokens: int = 2048, temperature: float = 0.0) -> dict | None:
@@ -311,18 +342,37 @@ class OpenAICompatClient:
                  model: str | None = None, max_tokens: int = 4096,
                  temperature: float = 0.7, format: str | None = None,
                  **_) -> str:
-        messages = []
-        if system:
-            messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": prompt})
-        payload: dict[str, Any] = {
-            "model": model or self.model,
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-        }
-        data = self._post(payload)
-        return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        import time as _time
+        retries = 2
+        last_error: str | None = None
+        for attempt in range(retries + 1):
+            messages = []
+            if system:
+                messages.append({"role": "system", "content": system})
+            messages.append({"role": "user", "content": prompt})
+            payload: dict[str, Any] = {
+                "model": model or self.model,
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+            }
+            if format:
+                payload["response_format"] = {"type": "json_object"}
+            try:
+                data = self._post(payload)
+                text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                # Strip thinking tags if the model returns them
+                text = OllamaClient._strip_thinking(text)
+                if text.strip():
+                    return text
+                last_error = "empty response"
+            except OllamaError as e:
+                last_error = str(e)
+            if attempt < retries:
+                _time.sleep(1.0 * (attempt + 1))
+        raise OllamaError(
+            f"Cloud provider returned empty/error after {retries + 1} attempts: {last_error}"
+        )
 
     def json(self, prompt: str, system: str | None = None,
              model: str | None = None, max_tokens: int = 2048,
@@ -335,11 +385,27 @@ class OpenAICompatClient:
             return None
 
     def chat(self, messages: list[dict], model: str | None = None, **opts) -> str:
-        payload = {
-            "model": model or self.model,
-            "messages": messages,
-            "max_tokens": opts.get("max_tokens", 4096),
-            "temperature": opts.get("temperature", 0.7),
-        }
-        data = self._post(payload)
-        return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        import time as _time
+        retries = opts.pop("_retries", 2)
+        last_error: str | None = None
+        for attempt in range(retries + 1):
+            payload = {
+                "model": model or self.model,
+                "messages": messages,
+                "max_tokens": opts.get("max_tokens", 4096),
+                "temperature": opts.get("temperature", 0.7),
+            }
+            try:
+                data = self._post(payload)
+                text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                text = OllamaClient._strip_thinking(text)
+                if text.strip():
+                    return text
+                last_error = "empty response"
+            except OllamaError as e:
+                last_error = str(e)
+            if attempt < retries:
+                _time.sleep(1.0 * (attempt + 1))
+        raise OllamaError(
+            f"Cloud provider returned empty/error after {retries + 1} attempts: {last_error}"
+        )

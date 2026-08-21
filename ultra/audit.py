@@ -4,9 +4,14 @@ Every significant operation (intent dispatch, agent run, file write,
 command execution, LLM inference) is recorded with actor, action,
 timestamps, duration, provider and error. Rows are never updated or
 deleted — the log is append-only.
+
+P2-11: Hash chaining for tamper detection. Each entry's hash includes
+the previous entry's hash, forming a chain. Any modification to a past
+entry breaks the chain.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import threading
@@ -39,25 +44,46 @@ class AuditLog:
                     detail TEXT,
                     duration_ms REAL,
                     provider TEXT,
-                    error TEXT
+                    error TEXT,
+                    entry_hash TEXT NOT NULL DEFAULT '',
+                    prev_hash TEXT NOT NULL DEFAULT ''
                 )
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_actor ON audit_log(actor)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_ts ON audit_log(ts)")
 
+    @staticmethod
+    def _compute_hash(ts: float, actor: str, action: str, detail: str,
+                      prev_hash: str) -> str:
+        """Compute SHA-256 hash for an audit entry, chaining to previous."""
+        payload = f"{ts}|{actor}|{action}|{detail or ''}|{prev_hash}"
+        return hashlib.sha256(payload.encode()).hexdigest()
+
+    def _get_last_hash(self) -> str:
+        """Get the hash of the most recent audit entry."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT entry_hash FROM audit_log ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        return row[0] if row else ""
+
     def log(self, actor: str, action: str, task_type: str | None = None,
             detail: dict | str | None = None, duration_ms: float | None = None,
             provider: str | None = None, error: str | None = None) -> None:
-        """Append one entry."""
+        """Append one entry with hash chaining for tamper detection."""
         if isinstance(detail, dict):
             detail = json.dumps(detail, default=str)[:4000]
+        ts = time.time()
+        prev_hash = self._get_last_hash()
+        entry_hash = self._compute_hash(ts, actor, action, detail, prev_hash)
         with self.lock:
             with self._connect() as conn:
                 conn.execute(
                     "INSERT INTO audit_log (ts, actor, action, task_type, detail,"
-                    " duration_ms, provider, error) VALUES (?,?,?,?,?,?,?,?)",
-                    (time.time(), actor, action, task_type, detail,
-                     duration_ms, provider, error),
+                    " duration_ms, provider, error, entry_hash, prev_hash)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (ts, actor, action, task_type, detail,
+                     duration_ms, provider, error, entry_hash, prev_hash),
                 )
 
     def log_inference(self, agent: str, task_type: str, prompt: str,
