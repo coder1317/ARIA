@@ -172,32 +172,57 @@ class Config:
 
     @staticmethod
     def _build_providers(cfg: "Config") -> list[ProviderSpec]:
-        """Default provider set: two local models + optional cloud.
+        """Default provider set: local first, cloud as fast fallback.
 
-        The chat and coding models are separate providers so code paths
-        route to the coding model first; the fallback model (hermes) is a
-        last-resort provider that catches any task type.
+        Priority order (lower = tried first):
+          1. chat model (local, e.g. lfm2.5) — fast, free, always available
+          2. coding model (local) — same for code tasks
+          3. cloud model (if configured) — tried when local is slow/overloaded
+          5. fallback model (hermes3:3b) — last resort, always works
+
+        This ensures ARIA starts instantly (no cloud ping on startup)
+        and only uses the cloud when local models are unavailable or slow.
         """
+        # Check if the chat model is a cloud model (contains 'cloud' or 'oss')
+        is_cloud_chat = any(k in cfg.chat_model.lower() for k in ("cloud", "oss", ":remote"))
+        is_cloud_code = any(k in cfg.coding_model.lower() for k in ("cloud", "oss", ":remote"))
+
+        # If chat model is cloud, use the fallback (local) model as primary
+        chat_model = cfg.fallback_model if is_cloud_chat else cfg.chat_model
+        code_model = cfg.fallback_model if is_cloud_code else cfg.coding_model
+
         specs = [
-            ProviderSpec(name="chat", kind="ollama", model=cfg.chat_model,
+            ProviderSpec(name="chat", kind="ollama", model=chat_model,
                          base_url=cfg.ollama_url,
                          capabilities=frozenset({"chat", "research", "json"}),
                          priority=1),
-            ProviderSpec(name="coding", kind="ollama", model=cfg.coding_model,
+            ProviderSpec(name="coding", kind="ollama", model=code_model,
                          base_url=cfg.ollama_url,
                          capabilities=frozenset({"code", "json"}),
                          priority=1),
-            ProviderSpec(name="fallback", kind="ollama", model=cfg.fallback_model,
-                         base_url=cfg.ollama_url,
-                         capabilities=frozenset({"chat", "code", "research", "json"}),
-                         priority=5),
         ]
-        # Optional OpenAI-compatible cloud provider (Groq, OpenRouter,
-        # Cerebras, ...). Activates only when both vars are set.
+
+        # If chat/code models are cloud, add them as priority 3 fallback
+        if is_cloud_chat:
+            specs.append(ProviderSpec(
+                name="cloud_chat", kind="ollama", model=cfg.chat_model,
+                base_url=cfg.ollama_url,
+                capabilities=frozenset({"chat", "research", "json", "code"}),
+                priority=3,
+            ))
+
+        # Always include the fallback model as last resort
+        if cfg.fallback_model not in (chat_model, code_model):
+            specs.append(ProviderSpec(name="fallback", kind="ollama",
+                                     model=cfg.fallback_model,
+                                     base_url=cfg.ollama_url,
+                                     capabilities=frozenset({"chat", "code", "research", "json"}),
+                                     priority=5))
+
+        # Optional external OpenAI-compatible cloud (Groq, OpenRouter, etc.)
         if os.getenv("ULTRA_CLOUD_BASE_URL") and os.getenv("ULTRA_CLOUD_API_KEY"):
             specs.append(ProviderSpec(
-                name="cloud",
-                kind="openai",
+                name="cloud", kind="openai",
                 model=os.getenv("ULTRA_CLOUD_MODEL", ""),
                 base_url=os.getenv("ULTRA_CLOUD_BASE_URL", "").rstrip("/"),
                 api_key=os.getenv("ULTRA_CLOUD_API_KEY"),
