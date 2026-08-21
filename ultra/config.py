@@ -64,9 +64,9 @@ class ProviderSpec:
 @dataclass
 class Config:
     ollama_url: str = "http://localhost:11434"
-    chat_model: str = "lfm2.5"
-    coding_model: str = "lfm2.5"
-    fallback_model: str = "hermes3:3b"
+    chat_model: str = "gpt-oss:20b-cloud"
+    coding_model: str = "gpt-oss:20b-cloud"
+    fallback_model: str = "lfm2.5"
     embed_model: str = "nomic-embed-text"
     search_timeout: int = 15
     research_max_sources: int = 6
@@ -108,9 +108,9 @@ class Config:
 
         cfg = cls(
             ollama_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/"),
-            chat_model=os.getenv("OLLAMA_CHAT_MODEL", "lfm2.5"),
-            coding_model=os.getenv("OLLAMA_CODING_MODEL", "lfm2.5"),
-            fallback_model=os.getenv("OLLAMA_FALLBACK_MODEL", "hermes3:3b"),
+            chat_model=os.getenv("OLLAMA_CHAT_MODEL", "gpt-oss:20b-cloud"),
+            coding_model=os.getenv("OLLAMA_CODING_MODEL", "gpt-oss:20b-cloud"),
+            fallback_model=os.getenv("OLLAMA_FALLBACK_MODEL", "lfm2.5"),
             embed_model=os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text"),
             search_timeout=int(os.getenv("SEARCH_TIMEOUT_SECONDS", "15")),
             research_max_sources=int(os.getenv("RESEARCH_MAX_SOURCES", "6")),
