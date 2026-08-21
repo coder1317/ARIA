@@ -174,6 +174,11 @@ class OllamaClient:
                 payload["format"] = format
             data = self._post("/api/generate", payload)
             text = self._strip_thinking(data.get("response", ""))
+            # Cloud reasoning models may put response in 'thinking' field
+            if not text.strip():
+                thinking = data.get("thinking", "")
+                if thinking.strip():
+                    text = thinking.strip()
             if text.strip():
                 return text
             last_error = "empty response"
@@ -206,7 +211,8 @@ class OllamaClient:
             payload["system"] = system
         in_thinking = False
         for chunk in self._stream("/api/generate", payload):
-            token = chunk.get("response", "")
+            # Cloud reasoning models put response in 'thinking' field
+            token = chunk.get("response", "") or chunk.get("thinking", "")
             if not token:
                 continue
             # Strip <think> blocks during streaming
@@ -238,7 +244,13 @@ class OllamaClient:
             if opts.get("format"):
                 payload["format"] = opts["format"]
             data = self._post("/api/chat", payload)
-            text = self._strip_thinking(data.get("message", {}).get("content", ""))
+            msg = data.get("message", {})
+            text = self._strip_thinking(msg.get("content", ""))
+            # Cloud reasoning models (gpt-oss) put response in 'thinking' field
+            if not text.strip():
+                thinking = msg.get("thinking", "")
+                if thinking.strip():
+                    text = thinking.strip()
             if text.strip():
                 return text
             last_error = "empty response"

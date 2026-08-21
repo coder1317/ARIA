@@ -129,23 +129,6 @@ class AriaCLI:
                  f"ollama pull {self.config.fallback_model}")
             return
         ok("Ollama connected")
-        # P1-5: Cloud model health check — non-blocking background check
-        if any(k in self.config.chat_model.lower() for k in ("cloud", "oss")):
-            import threading as _threading
-            def _cloud_check():
-                try:
-                    import time as _time
-                    t0 = _time.time()
-                    self.client.generate("ping", max_tokens=4,
-                                        model=self.config.chat_model, task_type="chat")
-                    latency = _time.time() - t0
-                    if latency > 10:
-                        warn(f"Cloud model slow ({latency:.0f}s) — using local first")
-                    else:
-                        ok(f"Cloud model healthy ({latency:.1f}s)")
-                except Exception:
-                    info("Cloud model unreachable — local models are primary")
-            _threading.Thread(target=_cloud_check, daemon=True).start()
         models = self.client.available_models()
         # Check models considering Ollama's :latest suffix
         def _model_available(name: str) -> bool:

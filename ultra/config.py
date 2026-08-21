@@ -183,41 +183,22 @@ class Config:
         This ensures ARIA starts instantly (no cloud ping on startup)
         and only uses the cloud when local models are unavailable or slow.
         """
-        # Check if the chat model is a cloud model (contains 'cloud' or 'oss')
-        is_cloud_chat = any(k in cfg.chat_model.lower() for k in ("cloud", "oss", ":remote"))
-        is_cloud_code = any(k in cfg.coding_model.lower() for k in ("cloud", "oss", ":remote"))
-
-        # If chat model is cloud, use the fallback (local) model as primary
-        chat_model = cfg.fallback_model if is_cloud_chat else cfg.chat_model
-        code_model = cfg.fallback_model if is_cloud_code else cfg.coding_model
-
+        # The primary model (chat_model) is always priority 1.
+        # The fallback model is priority 3 (fast failover if primary is slow/down).
         specs = [
-            ProviderSpec(name="chat", kind="ollama", model=chat_model,
+            ProviderSpec(name="chat", kind="ollama", model=cfg.chat_model,
                          base_url=cfg.ollama_url,
-                         capabilities=frozenset({"chat", "research", "json"}),
-                         priority=1),
-            ProviderSpec(name="coding", kind="ollama", model=code_model,
-                         base_url=cfg.ollama_url,
-                         capabilities=frozenset({"code", "json"}),
+                         capabilities=frozenset({"chat", "research", "json", "code"}),
                          priority=1),
         ]
-
-        # If chat/code models are cloud, add them as priority 3 fallback
-        if is_cloud_chat:
+        # Add fallback if it's a different model
+        if cfg.fallback_model != cfg.chat_model:
             specs.append(ProviderSpec(
-                name="cloud_chat", kind="ollama", model=cfg.chat_model,
+                name="fallback", kind="ollama", model=cfg.fallback_model,
                 base_url=cfg.ollama_url,
-                capabilities=frozenset({"chat", "research", "json", "code"}),
+                capabilities=frozenset({"chat", "code", "research", "json"}),
                 priority=3,
             ))
-
-        # Always include the fallback model as last resort
-        if cfg.fallback_model not in (chat_model, code_model):
-            specs.append(ProviderSpec(name="fallback", kind="ollama",
-                                     model=cfg.fallback_model,
-                                     base_url=cfg.ollama_url,
-                                     capabilities=frozenset({"chat", "code", "research", "json"}),
-                                     priority=5))
 
         # Optional external OpenAI-compatible cloud (Groq, OpenRouter, etc.)
         if os.getenv("ULTRA_CLOUD_BASE_URL") and os.getenv("ULTRA_CLOUD_API_KEY"):
