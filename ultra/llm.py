@@ -260,6 +260,65 @@ class OllamaClient:
             f"Model returned empty responses after {retries + 1} attempts."
         )
 
+    def chat_with_tools(self, messages: list[dict], tools: list[dict],
+                        model: str | None = None, **opts) -> dict:
+        """Chat with native tool calling support.
+
+        Returns dict with:
+          - text: str (the text response, if any)
+          - tool_calls: list[dict] (tool calls from the model)
+          - finish_reason: str
+
+        This enables the agent runtime to use Ollama's native
+        structured tool calling instead of JSON plan parsing.
+        """
+        import time as _time
+        retries = opts.pop("_retries", 2)
+        for attempt in range(retries + 1):
+            payload: dict[str, Any] = {
+                "model": self._resolve(model),
+                "messages": messages,
+                "stream": False,
+                "tools": tools,
+                "options": {"num_predict": opts.get("max_tokens", 4096),
+                            "temperature": opts.get("temperature", 0.7)},
+            }
+            data = self._post("/api/chat", payload)
+            msg = data.get("message", {})
+            text = self._strip_thinking(msg.get("content", ""))
+            if not text.strip():
+                thinking = msg.get("thinking", "")
+                if thinking.strip():
+                    text = thinking.strip()
+
+            tool_calls_raw = msg.get("tool_calls", [])
+            tool_calls = []
+            for tc in tool_calls_raw:
+                func = tc.get("function", {})
+                tool_calls.append({
+                    "name": func.get("name", ""),
+                    "arguments": func.get("arguments", {}),
+                })
+
+            # If we got tool calls, return them even if text is empty
+            if tool_calls:
+                return {
+                    "text": text.strip(),
+                    "tool_calls": tool_calls,
+                    "finish_reason": "tool_calls",
+                }
+            if text.strip():
+                return {
+                    "text": text.strip(),
+                    "tool_calls": [],
+                    "finish_reason": "stop",
+                }
+            if attempt < retries:
+                _time.sleep(1.0 * (attempt + 1))
+        raise OllamaError(
+            f"Model returned empty responses after {retries + 1} attempts."
+        )
+
     def json(self, prompt: str, system: str | None = None, model: str | None = None,
              max_tokens: int = 2048, temperature: float = 0.0) -> dict | None:
         """Force structured JSON output. Returns None on parse failure."""
@@ -413,6 +472,47 @@ class OpenAICompatClient:
                 text = OllamaClient._strip_thinking(text)
                 if text.strip():
                     return text
+                last_error = "empty response"
+            except OllamaError as e:
+                last_error = str(e)
+            if attempt < retries:
+                _time.sleep(1.0 * (attempt + 1))
+        raise OllamaError(
+            f"Cloud provider returned empty/error after {retries + 1} attempts: {last_error}"
+        )
+
+    def chat_with_tools(self, messages: list[dict], tools: list[dict],
+                        model: str | None = None, **opts) -> dict:
+        """Chat with native tool calling (OpenAI-compatible format)."""
+        import time as _time
+        retries = opts.pop("_retries", 2)
+        for attempt in range(retries + 1):
+            payload = {
+                "model": model or self.model,
+                "messages": messages,
+                "tools": tools,
+                "max_tokens": opts.get("max_tokens", 4096),
+                "temperature": opts.get("temperature", 0.7),
+            }
+            try:
+                data = self._post(payload)
+                choice = data.get("choices", [{}])[0]
+                msg = choice.get("message", {})
+                text = OllamaClient._strip_thinking(msg.get("content", "") or "")
+                tool_calls_raw = msg.get("tool_calls", [])
+                tool_calls = []
+                for tc in tool_calls_raw:
+                    func = tc.get("function", {})
+                    tool_calls.append({
+                        "name": func.get("name", ""),
+                        "arguments": func.get("arguments", {}),
+                    })
+                if tool_calls:
+                    return {"text": text.strip(), "tool_calls": tool_calls,
+                            "finish_reason": "tool_calls"}
+                if text.strip():
+                    return {"text": text.strip(), "tool_calls": [],
+                            "finish_reason": "stop"}
                 last_error = "empty response"
             except OllamaError as e:
                 last_error = str(e)

@@ -31,6 +31,7 @@ def register_all_tools(
     vectors=None,
     client=None,
     skills=None,
+    orchestrator=None,
 ) -> None:
     """Register all ARIA tools into the given registry.
 
@@ -43,6 +44,7 @@ def register_all_tools(
         vectors: VectorStore instance.
         client: ProviderPool for LLM calls.
         skills: SkillManager instance.
+        orchestrator: Orchestrator instance for pipeline tools.
     """
     _register_terminal(registry, terminal, config)
     _register_filesystem(registry, config)
@@ -51,6 +53,8 @@ def register_all_tools(
     _register_skills(registry, skills)
     _register_model(registry, client, config)
     _register_chat(registry, client)
+    if orchestrator is not None:
+        _register_pipelines(registry, orchestrator)
     logger.info("registered %d tools", registry.tool_count)
 
 
@@ -413,3 +417,135 @@ def _register_chat(registry: ToolRegistry, client) -> None:
         risk_level=RiskLevel.READ_ONLY,
         category="chat",
     ))
+
+
+# ── Pipeline tools (research, build, market) ─────────────────
+def _register_pipelines(registry: ToolRegistry, orchestrator) -> None:
+    """Register high-level pipeline functions as tools.
+
+    This allows the Agent Runtime to use research, build, and market
+    capabilities as first-class tools, enabling the runtime to plan
+    multi-pipeline workflows like "research X, then build Y".
+    """
+    def _research_topic(topic: str, mode: str = "deep") -> str:
+        """Run deep research on a topic and return the report."""
+        try:
+            report = orchestrator.research.run(topic, mode)
+            path = orchestrator.research.save(report)
+            # Build summary with confidence
+            summary = report.markdown[:3000]
+            if report.confidence > 0:
+                conf = "high" if report.confidence > 0.7 else "medium" if report.confidence > 0.4 else "low"
+                summary += f"\n\nConfidence: {conf} ({report.confidence:.0%}) | Report saved: {path}"
+            else:
+                summary += f"\n\nReport saved: {path}"
+            return summary
+        except Exception as e:
+            return f"research failed: {e}"
+
+    def _build_project(description: str) -> str:
+        """Build a complete project from a description."""
+        try:
+            path = orchestrator.engineering.build(description, report=orchestrator)
+            eval_result = orchestrator.evaluator.evaluate_project(path)
+            return f"Project built at {path}\nEvaluation: {eval_result.summary()}"
+        except Exception as e:
+            return f"build failed: {e}"
+
+    def _market_analysis(topic: str, mode: str = "overview") -> str:
+        """Run market analysis on a topic."""
+        try:
+            report = orchestrator.market.run(topic, mode)
+            path = orchestrator.market.save(report)
+            return f"Market report saved: {path}\n\n{report.markdown[:3000]}"
+        except Exception as e:
+            return f"market analysis failed: {e}"
+
+    def _code_review(project_path: str) -> str:
+        """Review code in a project directory."""
+        try:
+            from ultra.agents import reviewer
+            result = reviewer.review_project(
+                orchestrator.client, Path(project_path), orchestrator.config
+            )
+            return result[:3000]
+        except Exception as e:
+            return f"review failed: {e}"
+
+    def _debug_code(project_path: str, issue: str = "") -> str:
+        """Debug issues in a project."""
+        try:
+            from ultra.agents import debugger
+            result = debugger.fix_issues(
+                orchestrator.client, Path(project_path),
+                issue or "find and fix issues", orchestrator.config
+            )
+            return result[:3000]
+        except Exception as e:
+            return f"debug failed: {e}"
+
+    registry.register(ToolDefinition(
+        name="pipeline.research",
+        description="Run deep research on a topic. Returns a comprehensive "
+                    "report with sources, citations, and analysis. "
+                    "Use mode='compare' for comparisons, 'deep' for detailed research.",
+        handler=_research_topic,
+        params=[
+            ToolParam("topic", "string", "Research topic or question", required=True),
+            ToolParam("mode", "string", "Research mode: deep, compare, feasibility",
+                     enum=["deep", "compare", "feasibility", "competitive"]),
+        ],
+        risk_level=RiskLevel.READ_ONLY,
+        category="pipeline",
+    ))
+    registry.register(ToolDefinition(
+        name="pipeline.build",
+        description="Build a complete project from a description. Creates "
+                    "architecture, code, tests, and documentation.",
+        handler=_build_project,
+        params=[
+            ToolParam("description", "string",
+                     "Detailed description of what to build", required=True),
+        ],
+        risk_level=RiskLevel.MODERATE,
+        category="pipeline",
+    ))
+    registry.register(ToolDefinition(
+        name="pipeline.market",
+        description="Run market intelligence analysis. SWOT, competitive "
+                    "analysis, trends, and market reports.",
+        handler=_market_analysis,
+        params=[
+            ToolParam("topic", "string", "Market analysis topic", required=True),
+            ToolParam("mode", "string", "Analysis mode",
+                     enum=["overview", "swot", "trends", "competitors"]),
+        ],
+        risk_level=RiskLevel.READ_ONLY,
+        category="pipeline",
+    ))
+    registry.register(ToolDefinition(
+        name="pipeline.review",
+        description="Review code in a project directory. Finds bugs, "
+                    "style issues, and suggests improvements.",
+        handler=_code_review,
+        params=[
+            ToolParam("project_path", "string",
+                     "Path to the project directory", required=True),
+        ],
+        risk_level=RiskLevel.READ_ONLY,
+        category="pipeline",
+    ))
+    registry.register(ToolDefinition(
+        name="pipeline.debug",
+        description="Debug issues in a project. Analyzes errors and "
+                    "applies fixes.",
+        handler=_debug_code,
+        params=[
+            ToolParam("project_path", "string",
+                     "Path to the project directory", required=True),
+            ToolParam("issue", "string", "Description of the issue to fix"),
+        ],
+        risk_level=RiskLevel.MODERATE,
+        category="pipeline",
+    ))
+    logger.info("registered 5 pipeline tools")

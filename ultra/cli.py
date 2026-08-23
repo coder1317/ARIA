@@ -78,6 +78,10 @@ HELP = """[bold cyan]Commands[/bold cyan]
   [white]notify[/white]              show recent notifications
   [white]watch[/white]               show watched directories + recent changes
   [white]watch add [path][/white]    add a directory to watch
+  [white]policies[/white]            show event→action policies
+  [white]policies log[/white]        show recent policy actions
+  [white]goal decompose [id][/white] decompose goal into tasks
+  [white]goal work [id][/white]      start working on a goal
   [white]exit[/white]                 quit
 
 [bold cyan]Just type naturally:[/bold cyan]
@@ -282,6 +286,9 @@ class AriaCLI:
             return
         if low == "watch" or low.startswith("watch "):
             self._watch(prompt[5:].strip())
+            return
+        if low == "policies" or low.startswith("policies "):
+            self._policies(prompt[9:].strip())
             return
 
         # work-mode override
@@ -1100,7 +1107,65 @@ class AriaCLI:
             console.print()
             return
 
-        warn("usage: goal list | goal add <title> | goal done <id> | goal progress <id> <pct> | goal abandon <id> | goal completed")
+        if low.startswith("decompose "):
+            try:
+                gid = int(arg[10:].strip())
+            except ValueError:
+                warn("usage: goal decompose <id>")
+                return
+            goal = goals.get(gid)
+            if not goal:
+                warn(f"Goal #{gid} not found")
+                return
+            info(f"Decomposing: {goal.title}...")
+            tasks = goals.decompose_to_tasks(gid, self.orch.client.json)
+            if not tasks:
+                warn("Could not decompose goal — try rephrasing")
+                return
+            console.print(f"\n[bold cyan]Tasks for Goal #{gid}[/bold cyan]")
+            for i, t in enumerate(tasks, 1):
+                icon = {"research": "🔍", "build": "🔨", "review": "📋"}.get(t["type"], "•")
+                console.print(f"  {icon} {i}. [{t['type']}] {t['objective']}")
+            console.print()
+            info("Use 'goal work <id>' to start executing tasks")
+            return
+
+        if low.startswith("work "):
+            try:
+                gid = int(arg[5:].strip())
+            except ValueError:
+                warn("usage: goal work <id>")
+                return
+            goal = goals.get(gid)
+            if not goal:
+                warn(f"Goal #{gid} not found")
+                return
+            if self.orch.runtime is None:
+                warn("Agent Runtime not available")
+                return
+            info(f"Working on goal: {goal.title}...")
+            # Get next task for this goal
+            task = goals.get_next_task(gid)
+            if not task:
+                ok(f"Goal #{gid} appears complete!")
+                return
+            # Run through runtime
+            objective = task["objective"]
+            plan = self.orch.runtime.create_plan(objective)
+            plan = self.orch.runtime.run(plan)
+            # Update goal progress
+            completed_steps = sum(1 for s in plan.steps
+                                  if s.status.value == "succeeded")
+            total_steps = len(plan.steps)
+            if total_steps > 0:
+                new_progress = min(1.0, goal.progress + (0.2 * completed_steps / total_steps))
+                goals.update_progress(gid, new_progress,
+                                      notes=f"Completed {completed_steps}/{total_steps} steps")
+            self.last_report = plan.summary()
+            console.print(Markdown(plan.summary()[:4000]))
+            return
+
+        warn("usage: goal list | goal add | goal done | goal progress | goal decompose | goal work | goal completed")
 
     def _notify(self) -> None:
         """Show recent notifications."""
@@ -1172,6 +1237,35 @@ class AriaCLI:
         """Decompose into background tasks via the TaskManager."""
         result = self.orch.orchestrate(text)
         console.print(result)
+
+    def _policies(self, arg: str) -> None:
+        """Show policy engine status and recent actions."""
+        engine = self.orch.policy_engine
+        low = arg.lower().strip()
+
+        if low == "log" or low == "actions":
+            actions = engine.get_action_log(limit=20)
+            if not actions:
+                info("No policy actions taken yet.")
+                return
+            console.print("\n[bold cyan]Recent Policy Actions[/bold cyan]")
+            for a in actions:
+                ts = time.strftime("%H:%M:%S", time.localtime(a["timestamp"]))
+                console.print(f"  [{ts}] {a['policy']} → {a['event']}: {a['result']}")
+            console.print()
+            return
+
+        # Default: show stats and policies
+        stats = engine.stats()
+        console.print("\n[bold cyan]Policy Engine[/bold cyan]")
+        label("Policies:", f"{stats['enabled']}/{stats['policies']} enabled")
+        label("Actions taken:", stats['actions_taken'])
+        console.print()
+        for p in engine.policies:
+            status = "✓" if p.enabled else "✗"
+            console.print(f"  {status} {p.name} [{p.event_type}] → {p.action_type}")
+        console.print()
+        info("Actions: policies log | policies (show this)")
 
     # ── Agent Runtime commands ──────────────────────────────────────
 

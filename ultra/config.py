@@ -96,7 +96,7 @@ class Config:
     # Browser
     browser_enabled: bool = False
     # Agent Runtime
-    runtime_enabled: bool = False
+    runtime_enabled: bool = True
     runtime_max_iterations: int = 30
     runtime_max_replans: int = 5
 
@@ -133,7 +133,7 @@ class Config:
             scheduler_interval=int(os.getenv("ARIA4_SCHEDULER_INTERVAL", "30")),
             mcp_servers=[s.strip() for s in os.getenv("ARIA_MCP_SERVERS", "").split(",") if s.strip()],
             browser_enabled=os.getenv("ARIA4_BROWSER", "").lower() in ("1", "true", "yes"),
-            runtime_enabled=os.getenv("ARIA4_RUNTIME", "").lower() in ("1", "true", "yes"),
+            runtime_enabled=os.getenv("ARIA4_RUNTIME", "0").lower() not in ("0", "false", "no"),
             runtime_max_iterations=int(os.getenv("ARIA4_RUNTIME_MAX_ITER", "30")),
             runtime_max_replans=int(os.getenv("ARIA4_RUNTIME_MAX_REPLAN", "5")),
         )

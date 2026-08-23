@@ -26,6 +26,7 @@ import json
 import logging
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable
@@ -33,6 +34,75 @@ from typing import Any, Callable
 from ultra.core.tool_registry import ToolCall, ToolRegistry, ToolResult
 
 logger = logging.getLogger("aria.runtime")
+
+
+# ── Mission Budgets ──────────────────────────────────────────
+
+@dataclass
+class MissionBudget:
+    """Limits for an autonomous mission."""
+    max_iterations: int = 30
+    max_tool_calls: int = 100
+    max_runtime_seconds: float = 1200.0  # 20 minutes
+    max_replans: int = 5
+    max_failed_actions: int = 10
+
+    def check(self, iterations: int, tool_calls: int,
+              elapsed: float, replans: int, failures: int) -> str | None:
+        """Return a reason string if budget is exceeded, else None."""
+        if iterations >= self.max_iterations:
+            return f"iteration budget exhausted ({iterations}/{self.max_iterations})"
+        if tool_calls >= self.max_tool_calls:
+            return f"tool call budget exhausted ({tool_calls}/{self.max_tool_calls})"
+        if elapsed >= self.max_runtime_seconds:
+            return f"time budget exhausted ({elapsed:.0f}s/{self.max_runtime_seconds:.0f}s)"
+        if replans >= self.max_replans:
+            return f"replan budget exhausted ({replans}/{self.max_replans})"
+        if failures >= self.max_failed_actions:
+            return f"failure budget exhausted ({failures}/{self.max_failed_actions})"
+        return None
+
+
+# ── Artifact Registry ─────────────────────────────────────────
+
+@dataclass
+class Artifact:
+    """A file or resource produced by a mission step."""
+    id: str
+    path: str
+    artifact_type: str  # "file", "report", "code", "config", "test"
+    created_by: str     # step_id
+    mission_id: str
+    description: str = ""
+    timestamp: float = field(default_factory=time.time)
+
+
+class ArtifactRegistry:
+    """Track all artifacts produced during missions."""
+
+    def __init__(self):
+        self._artifacts: dict[str, Artifact] = {}  # id → Artifact
+        self._by_mission: dict[str, list[str]] = {}  # mission_id → [artifact_ids]
+
+    def register(self, artifact: Artifact) -> None:
+        self._artifacts[artifact.id] = artifact
+        self._by_mission.setdefault(artifact.mission_id, []).append(artifact.id)
+
+    def get_mission_artifacts(self, mission_id: str) -> list[Artifact]:
+        ids = self._by_mission.get(mission_id, [])
+        return [self._artifacts[i] for i in ids if i in self._artifacts]
+
+    def summary(self, mission_id: str | None = None) -> str:
+        if mission_id:
+            artifacts = self.get_mission_artifacts(mission_id)
+        else:
+            artifacts = list(self._artifacts.values())
+        if not artifacts:
+            return "No artifacts tracked."
+        lines = [f"{len(artifacts)} artifacts:"]
+        for a in artifacts:
+            lines.append(f"  [{a.artifact_type}] {a.path} (by {a.created_by})")
+        return "\n".join(lines)
 
 
 # ── Step / Plan data structures ────────────────────────────────
@@ -214,6 +284,7 @@ class AgentRuntime:
         json_fn: Callable[[str, str], Any],
         max_iterations: int = 30,
         max_replans: int = 5,
+        budget: MissionBudget | None = None,
     ):
         """
         Args:
@@ -222,12 +293,18 @@ class AgentRuntime:
             json_fn: Function(prompt, system) -> parsed JSON.
             max_iterations: Max tool-call steps before forced stop.
             max_replans: Max replanning attempts before giving up.
+            budget: Optional mission budget for resource limits.
         """
         self.registry = registry
         self.llm = llm_fn
         self.json_fn = json_fn
         self.max_iterations = max_iterations
         self.max_replans = max_replans
+        self.budget = budget or MissionBudget(
+            max_iterations=max_iterations,
+            max_replans=max_replans,
+        )
+        self.artifacts = ArtifactRegistry()
         self._traces: list[ExecutionTrace] = []
 
     # ── Planning ───────────────────────────────────────────────
@@ -249,16 +326,41 @@ class AgentRuntime:
             "- NEVER use terminal.execute with natural language. It runs shell commands.\n"
             "- To write a file, use filesystem.write with path and content args.\n"
             "- To run a shell command, use terminal.execute with a real shell command.\n"
+            "- For research tasks, use pipeline.research (NOT web.search for deep research)\n"
+            "- For building projects, use pipeline.build\n"
+            "- For market analysis, use pipeline.market\n"
+            "- For code review, use pipeline.review\n"
+            "- For debugging, use pipeline.debug\n"
+            "- Use filesystem.read to inspect files before modifying them\n"
+            "- Use memory.search to check if ARIA already knows about this topic\n"
             "- Keep plans to 1-5 steps\n"
             "- Each step should do ONE thing\n"
             "- Steps with dependencies must list them in depends_on\n"
             "- Make args concrete: real file paths, real content, real commands\n"
+            "- For multi-step objectives (research AND build), chain steps with dependencies\n"
             f"{tools_prompt}\n\n"
-            "EXAMPLE valid plan for 'write hello to a file':\n"
+            "EXAMPLES:\n\n"
+            "1. 'Write hello to a file':\n"
             '{"steps": [{"id": "s1", "description": "write file", '
             '"tool": "filesystem.write", '
             '"args": {"path": "test.txt", "content": "hello"}, '
-            '"depends_on": []}]}'
+            '"depends_on": []}]}\n\n'
+            "2. 'Research CDC techniques for Verilog':\n"
+            '{"steps": [{"id": "s1", "description": "research CDC techniques", '
+            '"tool": "pipeline.research", '
+            '"args": {"topic": "CDC techniques for Verilog RTL", "mode": "deep"}, '
+            '"depends_on": []}]}\n\n'
+            "3. 'Research AI agents then build a prototype':\n"
+            '{"steps": [\n'
+            '  {"id": "s1", "description": "research AI agents", '
+            '"tool": "pipeline.research", '
+            '"args": {"topic": "AI agent architectures", "mode": "deep"}, '
+            '"depends_on": []},\n'
+            '  {"id": "s2", "description": "build prototype", '
+            '"tool": "pipeline.build", '
+            '"args": {"description": "AI agent prototype based on research"}, '
+            '"depends_on": ["s1"]}\n'
+            ']}'
         )
 
         prompt = (
@@ -332,49 +434,78 @@ class AgentRuntime:
         This is synchronous for compatibility with the current codebase.
         For async use, wrap in asyncio.
 
-        P3-17: Includes loop detection — if the same step fails 3 times
-        with the same error, the runtime force-replans or aborts.
+        Features:
+        - Budget enforcement (iterations, tool calls, time, replans, failures)
+        - Parallel execution of independent steps
+        - Loop detection (repeated same-error failures)
+        - Artifact tracking
         """
         start = time.time()
         iterations = 0
-        # P3-17: Loop detection — track consecutive failures per step
+        total_tool_calls = 0
+        total_failures = 0
         _failure_history: dict[str, list[str]] = {}  # step_id → [error messages]
 
-        while iterations < self.max_iterations:
+        while iterations < self.budget.max_iterations:
             iterations += 1
+            elapsed = time.time() - start
+
+            # Budget check
+            budget_reason = self.budget.check(
+                iterations, total_tool_calls, elapsed,
+                plan.replan_count, total_failures,
+            )
+            if budget_reason:
+                logger.warning("budget exceeded: %s", budget_reason)
+                plan.status = PlanStatus.FAILED
+                break
+
             ready = plan.ready_steps()
 
             if not ready:
                 if plan.any_failed():
                     # Try replanning
-                    if plan.replan_count < plan.max_replans:
+                    if plan.replan_count < self.budget.max_replans:
                         plan = self._replan(plan)
                         continue
                     else:
                         plan.status = PlanStatus.FAILED
                         break
                 elif plan.all_done():
-                    # All steps finished successfully (or skipped)
                     break
                 else:
-                    # All remaining steps are blocked — shouldn't happen
                     plan.status = PlanStatus.FAILED
                     break
 
-            # Execute the first ready step (could parallelize later)
-            step = ready[0]
-            self._execute_step(plan, step)
+            # Execute ready steps — parallel if multiple independent steps
+            if len(ready) == 1:
+                self._execute_step(plan, ready[0])
+                total_tool_calls += len(ready[0].tool_calls)
+                if ready[0].status == StepStatus.FAILED:
+                    total_failures += 1
+            else:
+                with ThreadPoolExecutor(max_workers=min(len(ready), 4)) as pool:
+                    futures = {pool.submit(self._execute_step, plan, s): s for s in ready}
+                    for future in as_completed(futures):
+                        try:
+                            future.result()
+                        except Exception as e:
+                            step_obj = futures[future]
+                            logger.warning("parallel step %s failed: %s", step_obj.id, e)
+                            total_failures += 1
+                for s in ready:
+                    total_tool_calls += len(s.tool_calls)
 
-            # P3-17: Loop detection — check for repeated failures
-            if step.status == StepStatus.FAILED:
-                error_key = step.observation.llm_analysis[:100] if step.observation else "unknown"
-                hist = _failure_history.setdefault(step.id, [])
+            # Loop detection — check for repeated failures
+            last_step = ready[-1] if ready else None
+            if last_step and last_step.status == StepStatus.FAILED:
+                error_key = last_step.observation.llm_analysis[:100] if last_step.observation else "unknown"
+                hist = _failure_history.setdefault(last_step.id, [])
                 hist.append(error_key)
                 if len(hist) >= 5 and len(set(hist[-5:])) == 1:
-                    # Same error 3 times in a row — force skip this step
-                    logger.warning("Loop detected for step %s: same error 3x — skipping", step.id)
-                    step.status = StepStatus.SKIPPED
-                    _failure_history[step.id] = []  # reset to avoid cascade
+                    logger.warning("Loop detected for step %s: same error 5x — skipping", last_step.id)
+                    last_step.status = StepStatus.SKIPPED
+                    _failure_history[last_step.id] = []
 
         if plan.status not in (PlanStatus.FAILED, PlanStatus.ABORTED, PlanStatus.REPLANNING):
             if plan.any_failed():
@@ -400,7 +531,7 @@ class AgentRuntime:
                 for s in plan.steps
             ],
             total_duration_ms=(time.time() - start) * 1000,
-            tool_calls_total=sum(len(s.tool_calls) for s in plan.steps),
+            tool_calls_total=total_tool_calls,
             replan_count=plan.replan_count,
             final_status=plan.status.value,
         )

@@ -111,13 +111,21 @@ class Orchestrator:
         self.evaluator = Evaluator(self.security)
         self.build_circuit = CircuitBreaker("build", max_failures=3)
 
-        # Phase 3: EventBus + Watchers + Notifications + Goals
+        # Phase 3: EventBus + Watchers + Notifications + Goals + Policy Engine
         self.event_bus = EventBus()
         self.watcher = FileWatcher(self.event_bus)
         self.notify = NotificationManager(
             log_path=config.data_dir / "memory" / "notifications.log")
         self.notify.subscribe_event_bus(self.event_bus)
         self.goals = GoalManager(config.data_dir / "memory" / "goals.db")
+        # Phase 3: Policy Engine for autonomous actions
+        from ultra.core.policy_engine import PolicyEngine, load_default_policies
+        self.policy_engine = PolicyEngine(
+            self.event_bus, runtime=self.runtime,
+            goals=self.goals, task_manager=self.tasks,
+            notify=self.notify,
+        )
+        load_default_policies(self.policy_engine)
         # Auto-watch the projects directory
         if config.projects_dir.exists():
             self.watcher.watch(config.projects_dir)
@@ -148,9 +156,9 @@ class Orchestrator:
             self.tasks.register("market", self._market_task)
             self.tasks.register("chat", self._chat_task)
 
-        # Agent Runtime (optional — enabled via ARIA4_RUNTIME=1)
+        # Agent Runtime (always initialized when available)
         self.runtime = None
-        if _HAS_RUNTIME and config.runtime_enabled:
+        if _HAS_RUNTIME:
             self._init_runtime()
 
     def project(self, path: Path, description: str) -> None:
@@ -181,7 +189,12 @@ class Orchestrator:
             self.audit.log(actor="brain", action="dispatch", task_type=intent,
                            detail=detail)
         try:
-            if intent == "research_only":
+            # Phase 1: Route through Agent Runtime when available
+            # The runtime uses the Tool Registry to decide which tools to call,
+            # rather than hardcoded intent → pipeline routing.
+            if self.runtime is not None and intent != "chat":
+                outcome = self._dispatch_via_runtime(text, intent)
+            elif intent == "research_only":
                 outcome = self._research(problem)
             elif intent == "build_only":
                 outcome = self._build(problem)
@@ -442,6 +455,7 @@ class Orchestrator:
             vectors=self.vectors,
             client=self.client,
             skills=self.skills,
+            orchestrator=self,
         )
 
         def llm_fn(prompt: str, system: str = "") -> str:
@@ -453,6 +467,20 @@ class Orchestrator:
         def json_fn(prompt: str, system: str = "") -> dict:
             return self.client.json(prompt, system=system, task_type="runtime")
 
+        # Phase 5: Wire execution security
+        from ultra.core.security_policy import ExecutionSecurity
+        exec_security = ExecutionSecurity()
+        # Set workspace boundaries
+        exec_security.policy.allowed_read_dirs = [
+            str(self.config.projects_dir),
+            str(self.config.data_dir),
+        ]
+        exec_security.policy.allowed_write_dirs = [
+            str(self.config.projects_dir),
+        ]
+        registry.set_security(exec_security)
+        self._exec_security = exec_security
+
         self.runtime = AgentRuntime(
             registry=registry,
             llm_fn=llm_fn,
@@ -461,6 +489,19 @@ class Orchestrator:
             max_replans=self.config.runtime_max_replans,
         )
         self._tool_registry = registry
+
+        # Phase 2: Register MCP tools into the unified registry
+        if self.config.mcp_servers:
+            try:
+                import asyncio
+                from ultra.tools.mcp_client import MCPManager, _HAS_MCP
+                if _HAS_MCP:
+                    mcp_mgr = MCPManager()
+                    asyncio.run(mcp_mgr.start())
+                    registry.register_mcp_server(mcp_mgr)
+                    logger.info("MCP tools registered: %d", len(mcp_mgr.available_tools()))
+            except Exception as e:
+                logger.warning("MCP registration failed: %s", e)
 
     def dispatch_runtime(self, text: str) -> str:
         """Route through the Agent Runtime instead of hardcoded pipelines.
@@ -509,6 +550,54 @@ class Orchestrator:
         return self.runtime.summary()
 
     # ── helpers ─────────────────────────────────────────────────────
+
+    def _dispatch_via_runtime(self, text: str, intent: str) -> str:
+        """Route through the Agent Runtime for complex queries.
+
+        The runtime creates a plan using available tools (including
+        pipeline.research, pipeline.build, etc.) and executes it through
+        the PLAN→ACT→OBSERVE→EVALUATE→REPLAN loop.
+        """
+        if self.runtime is None:
+            # Fallback to pipeline routing
+            problem = extract_problem(text)
+            if intent == "research_only":
+                return self._research(problem)
+            elif intent == "build_only":
+                return self._build(problem)
+            elif intent == "full_pipeline":
+                return self._pipeline(problem)
+            elif intent == "market":
+                return self._market(problem)
+            return self._chat(text)
+
+        try:
+            plan = self.runtime.create_plan(text)
+            plan = self.runtime.run(plan)
+        except Exception as e:
+            logger.warning("runtime dispatch failed, falling back to pipeline: %s", e)
+            # Fallback to pipeline routing
+            problem = extract_problem(text)
+            if intent == "research_only":
+                return self._research(problem)
+            elif intent == "build_only":
+                return self._build(problem)
+            elif intent == "full_pipeline":
+                return self._pipeline(problem)
+            elif intent == "market":
+                return self._market(problem)
+            return self._chat(text)
+
+        # Format result
+        lines = []
+        for obs in plan.observations:
+            for r in obs.tool_results:
+                lines.append(r.summary())
+        if plan.status == PlanStatus.COMPLETED:
+            result = "\n".join(lines) if lines else "Mission completed."
+        else:
+            result = f"Mission {plan.status.value}:\n" + "\n".join(lines)
+        return result
 
     def _memory_context(self, query: str = "") -> str:
         """Build memory context for chat — episodic, procedural, user model, facts."""

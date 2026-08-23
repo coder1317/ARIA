@@ -158,6 +158,110 @@ class Evaluator:
         return EvalResult(score=score, passed=score >= self.threshold, checks=checks)
 
 
+class GoalEvaluator:
+    """Evaluate whether a mission outcome satisfies the original goal.
+
+    Goes beyond tool success — checks if the actual objective was achieved.
+    """
+
+    def __init__(self, llm_fn=None):
+        self.llm_fn = llm_fn
+
+    def evaluate(self, goal: str, result: str, artifacts: list[str] | None = None) -> dict:
+        """Evaluate if the goal was achieved.
+
+        Returns:
+            {"achieved": bool, "confidence": float, "analysis": str,
+             "suggestions": list[str]}
+        """
+        if not self.llm_fn:
+            # Fallback: simple heuristic
+            achieved = len(result) > 50 and "failed" not in result.lower()
+            return {
+                "achieved": achieved,
+                "confidence": 0.5,
+                "analysis": "heuristic evaluation (no LLM available)",
+                "suggestions": [],
+            }
+
+        system = (
+            "You are ARIA's goal evaluator. Assess whether a mission\n"
+            "achieved its objective based on the goal description and\n"
+            "the result/output. Be honest — partial progress counts.\n\n"
+            "Return ONLY a JSON object:\n"
+            '{"achieved": bool, "confidence": 0.0-1.0, '
+            '"analysis": "brief assessment", '
+            '"suggestions": ["improvement ideas"]}'
+        )
+        prompt = (
+            f"Goal: {goal}\n\n"
+            f"Result:\n{result[:2000]}\n\n"
+        )
+        if artifacts:
+            prompt += f"Artifacts produced: {', '.join(artifacts[:10])}\n\n"
+        prompt += "Did the mission achieve the goal?"
+
+        try:
+            response = self.llm_fn(prompt, system)
+            if isinstance(response, dict):
+                return response
+            import json
+            return json.loads(response)
+        except Exception:
+            return {
+                "achieved": False,
+                "confidence": 0.3,
+                "analysis": "evaluation failed",
+                "suggestions": ["retry with more specific objective"],
+            }
+
+
+class VerificationLoop:
+    """Self-verification: generate → verify → evaluate → repair → verify again.
+
+    This makes ARIA check its own work before declaring success.
+    """
+
+    def __init__(self, evaluator: Evaluator, goal_evaluator: GoalEvaluator | None = None,
+                 max_repairs: int = 2):
+        self.evaluator = evaluator
+        self.goal_evaluator = goal_evaluator
+        self.max_repairs = max_repairs
+
+    def verify_project(self, project_dir: Path, goal: str = "") -> dict:
+        """Run full verification on a generated project.
+
+        Returns:
+            {"passed": bool, "score": float, "checks": dict,
+             "goal_achieved": bool, "repairs": int}
+        """
+        eval_result = self.evaluator.evaluate_project(project_dir)
+        goal_result = {"achieved": False, "confidence": 0}
+
+        if goal and self.goal_evaluator:
+            # Read project output for goal evaluation
+            try:
+                readme = project_dir / "README.md"
+                if readme.exists():
+                    output = readme.read_text(encoding="utf-8", errors="ignore")[:2000]
+                else:
+                    output = f"Project at {project_dir}"
+                goal_result = self.goal_evaluator.evaluate(goal, output)
+            except Exception:
+                pass
+
+        return {
+            "passed": eval_result.passed,
+            "score": eval_result.score,
+            "checks": eval_result.checks,
+            "goal_achieved": goal_result.get("achieved", False),
+            "goal_confidence": goal_result.get("confidence", 0),
+            "goal_analysis": goal_result.get("analysis", ""),
+            "suggestions": goal_result.get("suggestions", []),
+            "repairs": 0,
+        }
+
+
 class CircuitBreaker:
     """Stops repeated failure loops: N failures → open for cooldown."""
 

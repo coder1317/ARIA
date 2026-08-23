@@ -49,12 +49,16 @@ class Goal:
 class GoalManager:
     """Persistent goal storage with progress tracking.
 
+    Phase 3: Added goal decomposition → task generation pipeline.
+    Goals now drive autonomous task creation via the agent runtime.
+
     Usage:
         goals = GoalManager(db_path)
         goal = goals.add("Build ARIA production-ready", priority=1)
         goals.update_progress(goal.id, 0.5, notes="Phase 1+2 complete")
         goals.complete(goal.id)
         active = goals.list_active()
+        tasks = goals.decompose_to_tasks(goal.id, llm_fn)
     """
 
     def __init__(self, db_path: Path | str):
@@ -182,3 +186,67 @@ class GoalManager:
             updated_at=row["updated_at"], completed_at=row["completed_at"],
             notes=row["notes"],
         )
+
+    # Phase 3: Goal → Task decomposition
+
+    def decompose_to_tasks(self, goal_id: int, llm_json_fn) -> list[dict]:
+        """Use LLM to decompose a goal into actionable tasks.
+
+        Returns list of task dicts: [{"type": str, "objective": str, "priority": int}]
+        """
+        goal = self.get(goal_id)
+        if not goal:
+            return []
+
+        system = (
+            "You are ARIA's goal decomposer. Break a high-level goal into "
+            "concrete, actionable tasks. Each task should be something ARIA "
+            "can accomplish using its tools (research, build, review, debug).\n\n"
+            "Rules:\n"
+            "- 2-5 tasks per goal\n"
+            "- Tasks should be ordered by dependency\n"
+            "- Use 'research' for information gathering\n"
+            "- Use 'build' for creating/implementing\n"
+            "- Use 'review' for verification\n"
+            "- Each task must have a clear, measurable objective"
+        )
+        prompt = (
+            f"Goal: {goal.title}\n"
+            f"Description: {goal.description}\n"
+            f"Priority: {goal.priority}\n"
+            f"Tags: {', '.join(goal.tags)}\n\n"
+            "Decompose into tasks. Return ONLY a JSON array:\n"
+            '[{"type": "research"|"build"|"review", '
+            '"objective": "specific task description", '
+            '"priority": 0-3}]'
+        )
+        try:
+            result = llm_json_fn(prompt, system)
+            tasks = result if isinstance(result, list) else []
+            valid = []
+            for t in tasks:
+                if isinstance(t, dict) and t.get("type") in ("research", "build", "review"):
+                    if t.get("objective"):
+                        valid.append(t)
+            return valid[:5]  # cap at 5 tasks
+        except Exception:
+            return []
+
+    def get_next_task(self, goal_id: int) -> dict | None:
+        """Get the next actionable task for a goal.
+
+        Checks what's been done and suggests the next step.
+        """
+        goal = self.get(goal_id)
+        if not goal or goal.status == "completed":
+            return None
+
+        # Simple heuristic based on progress
+        if goal.progress < 0.2:
+            return {"type": "research", "objective": f"Research and analyze: {goal.title}"}
+        elif goal.progress < 0.5:
+            return {"type": "build", "objective": f"Implement initial prototype for: {goal.title}"}
+        elif goal.progress < 0.8:
+            return {"type": "review", "objective": f"Review and improve: {goal.title}"}
+        else:
+            return {"type": "build", "objective": f"Finalize and polish: {goal.title}"}

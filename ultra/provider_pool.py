@@ -34,6 +34,10 @@ TASK_CAPABILITY = {
     "routing": "chat",
     "embedding": "embed",
     "generic": "chat",
+    # Phase 4: complexity-based routing
+    "planning": "chat",      # complex planning needs strong model
+    "evaluation": "chat",    # evaluation needs strong model
+    "simple": "chat",        # simple tasks can use any model
 }
 
 CIRCUIT_OPEN_SECONDS = 60.0
@@ -251,6 +255,44 @@ class ProviderPool:
             f"Last error: {last_error}"
         )
 
+    def chat_with_tools(self, messages: list[dict], tools: list[dict],
+                        model: str | None = None,
+                        task_type: str = "chat", **opts) -> dict:
+        """Chat with native tool calling support across providers.
+
+        Returns dict with: text, tool_calls, finish_reason.
+        Routes through providers with retry + failover.
+        """
+        msgs = list(messages)
+        attempted: list[str] = []
+        last_error: str | None = None
+        for name in self._candidates(task_type, model):
+            spec = self.specs[name]
+            client = self.providers[name]
+            attempted.append(name)
+            limiter = self._rate_limiters.get(name)
+            if limiter:
+                limiter.acquire()
+            for retry in range(MAX_RETRIES + 1):
+                try:
+                    start = time.time()
+                    result = client.chat_with_tools(
+                        msgs, tools, model=spec.model, **opts)
+                    self.stats[name].record_success((time.time() - start) * 1000)
+                    return result
+                except Exception as e:
+                    last_error = f"{name}: {e}"
+                    if retry < MAX_RETRIES:
+                        time.sleep(RETRY_BACKOFF[min(retry, len(RETRY_BACKOFF) - 1)])
+            self.stats[name].record_failure(str(last_error))
+            if self.stats[name].health == ProviderHealth.UNHEALTHY:
+                self.circuit_open_until[name] = time.time() + CIRCUIT_OPEN_SECONDS
+                self.stats[name].health = ProviderHealth.CIRCUIT_OPEN
+        raise ProviderExhaustedError(
+            f"All providers failed for chat_with_tools. Attempted: {attempted}. "
+            f"Last error: {last_error}"
+        )
+
     def embed(self, text: str, model: str | None = None) -> list[float]:
         if self._ollama is None:
             raise ProviderExhaustedError("No local Ollama provider for embeddings")
@@ -336,3 +378,41 @@ class ProviderPool:
         for name in self.stats:
             self.stats[name] = ProviderStats()
         self.circuit_open_until.clear()
+
+    # Phase 4: Model routing based on task complexity
+
+    def route_for_complexity(self, task_description: str) -> str:
+        """Select the best provider based on task complexity.
+
+        Simple tasks (short, factual) → fastest model
+        Complex tasks (long, analytical) → strongest model
+        """
+        desc = task_description.lower()
+        word_count = len(task_description.split())
+
+        # Complex tasks: long, multi-step, analytical
+        complex_markers = [
+            "analyze", "research", "compare", "design", "architect",
+            "plan", "evaluate", "review", "debug", "optimize",
+            "comprehensive", "detailed", "thorough",
+        ]
+        is_complex = (word_count > 30 or
+                      any(m in desc for m in complex_markers))
+
+        if is_complex:
+            # Use the strongest available model
+            candidates = self._candidates("chat", None)
+            if candidates:
+                # Prefer cloud models for complex tasks
+                for name in candidates:
+                    if "cloud" in self.specs[name].model.lower():
+                        return name
+                return candidates[0]
+        else:
+            # Use the fastest model
+            candidates = self._candidates("chat", None)
+            if candidates:
+                # Prefer lowest latency
+                return min(candidates,
+                          key=lambda n: self.stats[n].avg_latency_ms or 999)
+        return ""
