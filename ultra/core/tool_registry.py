@@ -219,13 +219,14 @@ class ToolRegistry:
         """All tools as JSON Schema (for programmatic use)."""
         return [t.to_json_schema() for t in self._tools.values() if t.enabled]
 
-    def execute(self, call: ToolCall) -> ToolResult:
-        """Execute a tool call with validation.
+    def execute(self, call: ToolCall, auto_approve_moderate: bool = True) -> ToolResult:
+        """Execute a tool call with validation + risk enforcement.
 
-        1. Check tool exists
+        1. Check tool exists and is enabled
         2. Validate required args
-        3. Call handler
-        4. Track in history
+        3. Enforce risk-level policy (CRITICAL always blocked, HIGH configurable)
+        4. Call handler
+        5. Track in history
         """
         start = time.time()
 
@@ -234,6 +235,19 @@ class ToolRegistry:
             return ToolResult(call.tool, False, error=f"unknown tool: {call.tool}")
         if not tool.enabled:
             return ToolResult(call.tool, False, error=f"tool disabled: {call.tool}")
+
+        # ── Risk-level enforcement ──────────────────────────────
+        if tool.risk_level == RiskLevel.CRITICAL:
+            return ToolResult(
+                call.tool, False,
+                error=f"[SECURITY] CRITICAL tool '{call.tool}' requires explicit "
+                      "human approval. Cannot execute autonomously.",
+            )
+        if tool.risk_level == RiskLevel.HIGH and not auto_approve_moderate:
+            return ToolResult(
+                call.tool, False,
+                error=f"[SECURITY] HIGH-risk tool '{call.tool}' requires approval."
+            )
 
         # Validate required params
         required = {p.name for p in tool.params if p.required}

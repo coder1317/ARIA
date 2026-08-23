@@ -50,6 +50,7 @@ def register_all_tools(
     _register_research(registry, client, config)
     _register_skills(registry, skills)
     _register_model(registry, client, config)
+    _register_chat(registry, client)
     logger.info("registered %d tools", registry.tool_count)
 
 
@@ -381,4 +382,34 @@ def _register_model(registry: ToolRegistry, client, config: Config) -> None:
         handler=_provider_health,
         risk_level=RiskLevel.READ_ONLY,
         category="system",
+    ))
+
+
+# ── Chat (safe fallback) ──────────────────────────────────────
+def _register_chat(registry: ToolRegistry, client) -> None:
+    def _chat_respond(message: str) -> str:
+        """Safe fallback: respond to a message via the LLM."""
+        if not client:
+            return "provider pool not available"
+        try:
+            from ultra.persona import IDENTITY
+            response = client.chat(
+                [{"role": "user", "content": message}],
+                system=IDENTITY,
+                task_type="chat",
+            )
+            return response[:5000]
+        except Exception as e:
+            return f"chat failed: {e}"
+
+    registry.register(ToolDefinition(
+        name="chat.respond",
+        description="Respond to a user message using the LLM. "
+                    "Safe fallback when other planning fails.",
+        handler=_chat_respond,
+        params=[
+            ToolParam("message", "string", "The message to respond to", required=True),
+        ],
+        risk_level=RiskLevel.READ_ONLY,
+        category="chat",
     ))

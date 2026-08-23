@@ -306,13 +306,19 @@ class AgentRuntime:
         return plan
 
     def _fallback_plan(self, objective: str) -> Plan:
-        """Create a minimal plan when LLM planning fails."""
+        """Create a minimal plan when LLM planning fails.
+
+        SECURITY: Never convert natural language into shell commands.
+        Instead, create a chat-based plan that asks the LLM to handle
+        the objective directly.
+        """
         plan_id = f"plan-{uuid.uuid4().hex[:8]}"
-        # Try terminal.execute as a fallback
+        # Safe fallback: use chat to handle the objective
+        # The LLM will respond with text, not execute shell commands
         steps = [Step(
             id="step_1",
-            description=objective,
-            tool_calls=[ToolCall("terminal.execute", {"command": objective})],
+            description=f"Handle objective: {objective}",
+            tool_calls=[ToolCall("chat.respond", {"message": objective})],
         )]
         plan = Plan(id=plan_id, objective=objective, steps=steps)
         plan.status = PlanStatus.EXECUTING
